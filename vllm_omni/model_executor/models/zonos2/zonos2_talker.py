@@ -72,7 +72,7 @@ class Zonos2Attention(nn.Module):
         self.attn = Attention(
             num_heads=self.n_heads,
             head_size=self.head_dim,
-            scale=1.0,  # per-head temperature applied below instead
+            scale=self.head_dim**-0.5,  # default 1/sqrt(head_dim); temp handles per-head scaling
             num_kv_heads=self.n_kv_heads,
             prefix=f"{prefix}.attn",
         )
@@ -88,8 +88,9 @@ class Zonos2Attention(nn.Module):
         v = v.view(t, self.n_kv_heads, self.head_dim)
 
         # QK RMSNorm (weight-free; official ckpt carries no qk-norm params).
-        q = F.rms_norm(q, (self.head_dim,), eps=self.norm_eps)
-        k = F.rms_norm(k, (self.head_dim,), eps=self.norm_eps)
+        # Official uses eps=1e-6 here (attention-only), not the model-wide 1e-5.
+        q = F.rms_norm(q, (self.head_dim,), eps=1e-6)
+        k = F.rms_norm(k, (self.head_dim,), eps=1e-6)
 
         # Per-head temperature: q scaled by abs(temp) (absolute value per the
         # official implementation; verified in M2a).
@@ -113,9 +114,11 @@ class Zonos2DenseFFN(nn.Module):
         self.w_out = _WeightModule(config.dim, 3072)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate_up = F.linear(x, self.w_in.weight.reshape(2 * 3072, -1))
-        gate, up = gate_up.chunk(2, dim=-1)
-        return F.linear(F.silu(gate) * up, self.w_out.weight)
+        # Official w_in layout: first half = up (h), second half = gate;
+        # y = h * silu(gate) = up * silu(gate).
+        h_gate = F.linear(x, self.w_in.weight.reshape(2 * 3072, -1))
+        h, gate = h_gate.chunk(2, dim=-1)
+        return F.linear(h * F.silu(gate), self.w_out.weight)
 
 
 class Zonos2SonicRouter(nn.Module):
@@ -145,15 +148,23 @@ class Zonos2SonicRouter(nn.Module):
     def forward(
         self, x: torch.Tensor, prev_router_state: torch.Tensor | None
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Returns (expert_prob, next_router_state).
+
+        Official order: down_proj -> EDA blend (scale * prev_state) -> keep the
+        pre-norm state for the next MoE layer -> rmsnorm_eda -> router_mlp ->
+        softmax (float32). Top-k selection happens in the caller on
+        ``expert_prob + balancing_biases`` (legacy strategy); routing weights
+        are the pre-bias probabilities.
+        """
         h = self.down_proj(x)  # [T, 128]
         if prev_router_state is not None and hasattr(self, "router_states_scale"):
             h = h + self.router_states_scale * prev_router_state
-        state = h
+        state = h  # pre-norm; carried to the next MoE layer's EDA blend
         h = F.rms_norm(h, (h.shape[-1],), weight=self.rmsnorm_eda.weight, eps=1e-5)
         for layer in self.router_mlp:
             h = layer(h)
-        logits = h  # [T, 16] expert scores
-        return logits, state
+        expert_prob = F.softmax(h.float(), dim=-1)  # [T, 16]
+        return expert_prob, state
 
 
 class Zonos2MoE(nn.Module):
@@ -169,13 +180,12 @@ class Zonos2MoE(nn.Module):
         self.router = Zonos2SonicRouter(config, has_prev_state=layer_id > config.moe_start_from_layer)
 
     def forward(self, x: torch.Tensor, prev_router_state: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
-        logits, state = self.router(x, prev_router_state)
-        # Selection uses bias-shifted logits; routing weights come from the
-        # pre-bias probabilities (aux-loss-free balancing).
-        select_logits = logits + self.router.balancing_biases
-        topk_idx = torch.topk(select_logits, self.topk, dim=-1).indices  # [T, k]
-        probs = F.softmax(logits.float(), dim=-1)
-        weights = probs.gather(-1, topk_idx)  # [T, k], no renormalization
+        expert_prob, state = self.router(x, prev_router_state)
+        # Legacy aux-loss-free balancing: top-k on prob + bias, routing weights
+        # are the pre-bias probabilities (no renormalization).
+        scores = expert_prob + self.router.balancing_biases.float()
+        topk_idx = torch.topk(scores, self.topk, dim=-1).indices  # [T, k]
+        weights = expert_prob.gather(-1, topk_idx)  # [T, k]
 
         out = torch.zeros_like(x)
         for e in range(self.n_experts):
@@ -183,8 +193,10 @@ class Zonos2MoE(nn.Module):
             if not bool(mask.any()):
                 continue
             xe = x[mask]
-            gate_up = F.linear(xe, self.experts.w13[e])
-            gate, up = gate_up.chunk(2, dim=-1)
+            # Official w13 is row-INTERLEAVED: even rows = gate, odd rows = up.
+            w13 = self.experts.w13[e]
+            gate = F.linear(xe, w13[0::2])
+            up = F.linear(xe, w13[1::2])
             ye = F.linear(F.silu(gate) * up, self.experts.w2[e])
             # routing weight for expert e at its selected position (0 elsewhere)
             w = (weights[mask] * (topk_idx[mask] == e).float()).sum(dim=-1, keepdim=True)
@@ -223,12 +235,24 @@ class Zonos2DecoderLayer(nn.Module):
 
 
 class Zonos2MultiEmbedder(nn.Module):
-    """10-column embedding tables (9 audio codebooks + 1 text), summed."""
+    """10-column embedding tables (9 audio codebooks + 1 text), summed.
+
+    Audio tables: [codebook_size+2=1026, dim], padding_idx=audio_pad_id (1025).
+    Text table:   [text_vocab+1=520, dim], padding_idx=text_vocab (519).
+    Padding indices zero out pad positions, matching the official MultiEmbedding.
+    """
 
     def __init__(self, config: Zonos2Config):
         super().__init__()
-        vocab = config.codebook_vocab_size  # 1026 per column
-        self.embedders = nn.ModuleList([nn.Embedding(vocab, config.dim) for _ in range(config.frame_width)])
+        audio_vocab = config.codebook_vocab_size  # 1026
+        text_table_vocab = config.text_vocab + 1  # 520
+        self.embedders = nn.ModuleList(
+            [
+                nn.Embedding(audio_vocab, config.dim, padding_idx=config.audio_pad_id)
+                for _ in range(config.n_codebooks)
+            ]
+            + [nn.Embedding(text_table_vocab, config.dim, padding_idx=config.text_vocab)]
+        )
         self.frame_width = config.frame_width
 
     def forward(self, frame_ids: torch.Tensor) -> torch.Tensor:
@@ -280,13 +304,17 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
     def _embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """M1 prompt path: treat each position as a text-column token; audio
         columns contribute their pad-row embeddings. Full 10-column frame
-        layout (delay/shear, 17-frame silence tail, speaker slot) is P2-01."""
+        layout (delay/shear, 17-frame silence tail, speaker slot) is P2-01.
+        The summed embedding passes through the weight-free ``emb_norm``
+        RMSNorm, matching the official forward."""
         cfg = self.config
-        text_ids = input_ids.clamp(min=0, max=cfg.codebook_vocab_size - 1)
+        text_ids = input_ids.clamp(min=0, max=cfg.text_vocab)  # text table has 520 rows
         emb = self.multi_embedder.embedders[cfg.n_codebooks](text_ids)
         pad = torch.zeros_like(text_ids) + cfg.audio_pad_id
         for col in range(cfg.n_codebooks):
             emb = emb + self.multi_embedder.embedders[col](pad)
+        # official: x = emb_norm(x) with elementwise_affine=False
+        emb = F.rms_norm(emb, (cfg.dim,), eps=cfg.norm_eps)
         return emb
 
     def embed_input_ids(self, input_ids: torch.Tensor, **_: Any) -> torch.Tensor:
@@ -394,8 +422,34 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
 
     # ------------------------------------------------------------------- load
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        """M1: consume the iterator (dummy mode never calls this). The real
-        HF->vLLM mapping with L0 completeness checking lands in P2-06."""
-        for _ in weights:
-            pass
-        return {name for name, _ in self.named_parameters()}
+        """Load the converted safetensors (keys mirror this module tree 1:1).
+
+        L0 completeness contract: every tensor in the converted manifest must be
+        consumed (nothing skipped), and every model parameter must be initialized
+        (nothing missing). Stats are logged for the L0 check; shape mismatches
+        raise immediately.
+        """
+        params = dict(self.named_parameters())
+        loaded: set[str] = set()
+        skipped: list[str] = []
+        for name, w in weights:
+            target = params.get(name)
+            if target is None:
+                skipped.append(name)
+                continue
+            if tuple(target.shape) != tuple(w.shape):
+                raise ValueError(
+                    f"shape mismatch for {name}: checkpoint {tuple(w.shape)} vs model {tuple(target.shape)}"
+                )
+            target.data.copy_(w.to(target.dtype))
+            loaded.add(name)
+        missing = sorted(set(params) - loaded)
+        print(
+            f"[Zonos2] load_weights: consumed={len(loaded)} skipped={len(skipped)} missing={len(missing)}",
+            flush=True,
+        )
+        if skipped:
+            print(f"[Zonos2] skipped (unexpected) keys: {skipped[:20]}", flush=True)
+        if missing:
+            print(f"[Zonos2] missing (uninitialized) params: {missing[:20]}", flush=True)
+        return loaded

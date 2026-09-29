@@ -151,12 +151,30 @@ def main() -> None:
     with open(out_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
+    # Source-file digests make the manifest self-contained for provenance.
+    def _file_sha256(p: Path) -> str:
+        h = hashlib.sha256()
+        with open(p, "rb") as fp:
+            for chunk in iter(lambda: fp.read(1 << 26), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    print("      hashing source files for provenance", flush=True)
+    groups: dict[str, int] = {}
+    for e in entries:
+        top = e["key"].split(".")[0]
+        groups[top] = groups.get(top, 0) + 1
+
     manifest = {
         "source_checkpoint": str(ckpt_path),
         "source_params": str(params_path),
-        "source_sha256_note": "see P0_records.md for model.pth/params.json SHA256",
+        "source_sha256": {
+            ckpt_path.name: _file_sha256(ckpt_path),
+            params_path.name: _file_sha256(params_path),
+        },
         "tensor_count": len(entries),
         "total_params": total_params,
+        "groups": groups,
         "renamed": [{"src": o, "dst": n} for o, n in renamed],
         "removed_training_only": removed,
         "tensors": entries,
