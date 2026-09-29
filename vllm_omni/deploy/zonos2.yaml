@@ -1,0 +1,66 @@
+# ZONOS2 deploy: Stage 0 (talker, 9-codebook DAC tokens) -> Stage 1 (DAC 44.1kHz code2wav).
+#
+# M1 skeleton scope: sync handoff only (async_chunk: false), dummy or real
+# weights both supported via load_format. Streaming (async_chunk + chunked DAC
+# decode) is intentionally deferred to the M4 streaming milestone.
+async_chunk: false
+
+connectors:
+  connector_of_shared_memory:
+    name: SharedMemoryConnector
+    extra:
+      codec_streaming: false
+      connector_get_sleep_s: 0.01
+      connector_get_max_wait_first_chunk: 5000
+      connector_get_max_wait: 500
+
+stages:
+  - stage_id: 0
+    max_num_seqs: 4
+    gpu_memory_utilization: 0.6
+    enforce_eager: true
+    trust_remote_code: true
+    # ZONOS2 text path is NeMo-TN + UTF-8 bytes (no HF tokenizer).
+    skip_tokenizer_init: true
+    enable_prefix_caching: false
+    async_scheduling: false
+    max_num_batched_tokens: 4096
+    # ZONOS2 max_seqlen is 6144 frames; prompt + max_tokens must fit.
+    max_model_len: 6144
+    devices: "0"
+    output_connectors:
+      to_stage_1: connector_of_shared_memory
+    default_sampling_params:
+      # Official ZONOS2 defaults (params.json / TTSSamplingParams):
+      # temperature=1.15, top_k=106, min_p=0.18, top_p off, max_tokens=1024.
+      # Per-codebook repetition penalty (window=50, penalty=1.2, CB0-CB7) is
+      # applied by the model-side sampler, not the LM sampler.
+      temperature: 1.15
+      top_k: 106
+      min_p: 0.18
+      top_p: 1.0
+      max_tokens: 1024
+      seed: 42
+
+  - stage_id: 1
+    max_num_seqs: 4
+    gpu_memory_utilization: 0.25
+    enforce_eager: true
+    trust_remote_code: true
+    # ZONOS2 text path is NeMo-TN + UTF-8 bytes (no HF tokenizer).
+    skip_tokenizer_init: true
+    enable_prefix_caching: false
+    async_scheduling: false
+    # Prefill length is num_codebooks * num_frames; 9 * 1024 = 9216 per
+    # request at the Stage-0 cap, with headroom for batching.
+    max_num_batched_tokens: 65536
+    max_model_len: 65536
+    devices: "0"
+    input_connectors:
+      from_stage_0: connector_of_shared_memory
+    default_sampling_params:
+      temperature: 0.0
+      top_p: 1.0
+      top_k: -1
+      max_tokens: 65536
+      seed: 42
