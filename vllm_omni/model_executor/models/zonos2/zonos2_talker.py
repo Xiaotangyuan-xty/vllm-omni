@@ -305,16 +305,17 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         """M1 prompt path: treat each position as a text-column token; audio
         columns contribute their pad-row embeddings. Full 10-column frame
         layout (delay/shear, 17-frame silence tail, speaker slot) is P2-01.
-        The summed embedding passes through the weight-free ``emb_norm``
-        RMSNorm, matching the official forward."""
+
+        NOTE: this returns the RAW summed embedding. The weight-free
+        ``emb_norm`` RMSNorm is applied once in ``forward()`` so every input
+        path (token ids, frame ids, precomputed inputs_embeds) is normalized
+        exactly once."""
         cfg = self.config
         text_ids = input_ids.clamp(min=0, max=cfg.text_vocab)  # text table has 520 rows
         emb = self.multi_embedder.embedders[cfg.n_codebooks](text_ids)
         pad = torch.zeros_like(text_ids) + cfg.audio_pad_id
         for col in range(cfg.n_codebooks):
             emb = emb + self.multi_embedder.embedders[col](pad)
-        # official: x = emb_norm(x) with elementwise_affine=False
-        emb = F.rms_norm(emb, (cfg.dim,), eps=cfg.norm_eps)
         return emb
 
     def embed_input_ids(self, input_ids: torch.Tensor, **_: Any) -> torch.Tensor:
@@ -333,6 +334,10 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
             hidden = self._embed_input_ids(input_ids)
         else:
             hidden = inputs_embeds
+        # emb_norm: weight-free RMSNorm applied once at this common boundary,
+        # whatever the embedding source (token ids / frame ids / inputs_embeds).
+        # Callers producing inputs_embeds must NOT pre-normalize.
+        hidden = F.rms_norm(hidden, (self.config.dim,), eps=self.config.norm_eps)
         prev_router_state: torch.Tensor | None = None
         for layer in self.layers:
             hidden, prev_router_state = layer(hidden, positions, prev_router_state)
@@ -349,6 +354,12 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         # LM lifecycle channel: codebook-0 logits.
         lm_logits = fused[:, 0, :].float()
         return lm_logits
+
+    def fused_audio_logits(self) -> torch.Tensor | None:
+        """Public accessor for the full [N, 9, 1026] softcapped audio logits
+        from the most recent ``compute_logits`` call. Used by the M2a
+        teacher-forced parity harness so tests never touch private state."""
+        return getattr(self, "_last_fused_logits", None)
 
     def sample(self, logits: torch.Tensor, sampling_metadata: Any) -> None:
         """Model-owned 9-codebook sampler (M1: argmax; per-request params in M3).
@@ -424,32 +435,42 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         """Load the converted safetensors (keys mirror this module tree 1:1).
 
-        L0 completeness contract: every tensor in the converted manifest must be
-        consumed (nothing skipped), and every model parameter must be initialized
-        (nothing missing). Stats are logged for the L0 check; shape mismatches
-        raise immediately.
+        L0 completeness contract (hard-fail): every checkpoint tensor must be
+        consumed exactly once (nothing skipped, nothing duplicated) and every
+        model parameter must be initialized (nothing missing); shape and dtype
+        must match exactly. Any violation raises immediately — a partially
+        loaded model must never reach the forward pass.
         """
         params = dict(self.named_parameters())
         loaded: set[str] = set()
         skipped: list[str] = []
+        duplicates: list[str] = []
         for name, w in weights:
+            if name in loaded:
+                duplicates.append(name)
+                continue
             target = params.get(name)
             if target is None:
                 skipped.append(name)
                 continue
             if tuple(target.shape) != tuple(w.shape):
-                raise ValueError(
-                    f"shape mismatch for {name}: checkpoint {tuple(w.shape)} vs model {tuple(target.shape)}"
+                raise RuntimeError(
+                    f"[Zonos2] L0 shape mismatch for {name}: checkpoint {tuple(w.shape)} vs model {tuple(target.shape)}"
                 )
-            target.data.copy_(w.to(target.dtype))
+            if target.dtype != w.dtype:
+                raise RuntimeError(
+                    f"[Zonos2] L0 dtype mismatch for {name}: checkpoint {w.dtype} vs model {target.dtype}"
+                )
+            target.data.copy_(w)
             loaded.add(name)
         missing = sorted(set(params) - loaded)
-        print(
-            f"[Zonos2] load_weights: consumed={len(loaded)} skipped={len(skipped)} missing={len(missing)}",
-            flush=True,
-        )
-        if skipped:
-            print(f"[Zonos2] skipped (unexpected) keys: {skipped[:20]}", flush=True)
-        if missing:
-            print(f"[Zonos2] missing (uninitialized) params: {missing[:20]}", flush=True)
+        if skipped or missing or duplicates:
+            raise RuntimeError(
+                f"[Zonos2] L0 weight completeness failed: "
+                f"skipped={len(skipped)} missing={len(missing)} duplicates={len(duplicates)}\n"
+                f"  skipped (unexpected checkpoint keys): {skipped[:20]}\n"
+                f"  missing (uninitialized model params): {missing[:20]}\n"
+                f"  duplicates: {duplicates[:20]}"
+            )
+        print(f"[Zonos2] load_weights L0 OK: consumed={len(loaded)} tensors, no residue", flush=True)
         return loaded
