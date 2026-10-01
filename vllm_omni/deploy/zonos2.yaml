@@ -22,6 +22,11 @@ stages:
     trust_remote_code: true
     # ZONOS2 text path is NeMo-TN + UTF-8 bytes (no HF tokenizer).
     skip_tokenizer_init: true
+    # The frozen reference uses FlashInfer tensor-core decode (GQA=4).
+    # FA2 is numerically different and has not met the L1 parity gate.
+    attention_config:
+      backend: FLASHINFER
+      use_trtllm_attention: false
     enable_prefix_caching: false
     async_scheduling: false
     max_num_batched_tokens: 4096

@@ -29,7 +29,6 @@ import torch.nn.functional as F
 from torch import nn
 from vllm.config import VllmConfig
 from vllm.model_executor.layers.attention import Attention
-from vllm.model_executor.layers.fused_moe import MoEActivation, fused_experts
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.rotary_embedding.base import RotaryEmbedding
@@ -37,6 +36,11 @@ from vllm.model_executor.models.utils import make_layers
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.models.zonos2.configuration_zonos2 import Zonos2Config
+from vllm_omni.model_executor.models.zonos2.zonos2_moe import Zonos2TritonExperts
+from vllm_omni.model_executor.models.zonos2.zonos2_norm import (
+    zonos2_cuda_fused_add_rmsnorm,
+    zonos2_cuda_rmsnorm,
+)
 
 
 class _WeightModule(nn.Module):
@@ -66,16 +70,9 @@ class Zonos2RMSNorm(RMSNorm):
     def forward_cuda(
         self, x: torch.Tensor, residual: torch.Tensor | None = None
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        from flashinfer import fused_add_rmsnorm, rmsnorm
-
         if residual is None:
-            # Calling RMSNorm.forward_cuda would dispatch back into our native
-            # fallback. Use the official weighted norm kernel explicitly.
-            return rmsnorm(x, self.weight, self.variance_epsilon)
-
-        # vLLM's C++ fused kernel rounds the sum before normalizing. The
-        # official FlashInfer kernel normalizes the unrounded FP32 sum.
-        fused_add_rmsnorm(x, residual, self.weight, self.variance_epsilon)
+            return zonos2_cuda_rmsnorm(x, self.weight, self.variance_epsilon)
+        zonos2_cuda_fused_add_rmsnorm(x, residual, self.weight, self.variance_epsilon)
         return x, residual
 
 
@@ -155,6 +152,9 @@ class Zonos2Attention(nn.Module):
         q = self.wq(x)  # [T, 2048]
         kv = F.linear(x, self.wkv.weight.reshape(2 * self.n_kv_heads * self.head_dim, -1))
         k, v = kv.chunk(2, dim=-1)  # [T, 512] each
+        # QK normalization materializes K; make V's row stride match it for
+        # the native KV cache store, as in the official ChunkedLinear path.
+        v = v.contiguous()
 
         q = q.view(t, self.n_heads, self.head_dim)
         k = k.view(t, self.n_kv_heads, self.head_dim)
@@ -254,6 +254,7 @@ class Zonos2MoE(nn.Module):
         # Keep canonical interleaved checkpoint parameters for L0 attestation.
         # vLLM's fused kernel consumes contiguous gate/up halves instead.
         self.register_buffer("_packed_w13", None, persistent=False)
+        self._experts_kernel: Zonos2TritonExperts | None = None
 
     def prepare_expert_weights(self) -> None:
         self._packed_w13 = torch.cat([self.experts.w13[:, 0::2], self.experts.w13[:, 1::2]], dim=1).contiguous()
@@ -269,14 +270,14 @@ class Zonos2MoE(nn.Module):
         if x.device.type != "cpu":
             if self._packed_w13 is None:
                 self.prepare_expert_weights()
-            out = fused_experts(
-                hidden_states=x.contiguous(),
-                w1=self._packed_w13,
-                w2=self.experts.w2,
-                topk_weights=weights.float().contiguous(),
-                topk_ids=topk_idx.int().contiguous(),
-                activation=MoEActivation.SILU,
-                apply_router_weight_on_input=False,
+            if self._experts_kernel is None:
+                self._experts_kernel = Zonos2TritonExperts.create(x, self._packed_w13, self.topk)
+            out = self._experts_kernel.forward(
+                x.contiguous(),
+                self._packed_w13,
+                self.experts.w2,
+                weights.float().contiguous(),
+                topk_idx.int().contiguous(),
             )
             return out, state
 

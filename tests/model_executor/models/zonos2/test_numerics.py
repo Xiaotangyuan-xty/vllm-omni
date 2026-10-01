@@ -9,9 +9,16 @@ import math
 import pytest
 import torch
 from torch import nn
+from vllm.model_executor.layers.fused_moe import MoEActivation
 
 from vllm_omni.model_executor.models.zonos2.configuration_zonos2 import Zonos2Config
-from vllm_omni.model_executor.models.zonos2.zonos2_talker import Zonos2MoE, Zonos2RMSNorm, Zonos2RotaryEmbedding
+from vllm_omni.model_executor.models.zonos2.zonos2_moe import Zonos2TritonExperts
+from vllm_omni.model_executor.models.zonos2.zonos2_talker import (
+    Zonos2Attention,
+    Zonos2MoE,
+    Zonos2RMSNorm,
+    Zonos2RotaryEmbedding,
+)
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -131,3 +138,77 @@ def test_fused_residual_norm_uses_unrounded_sum_and_float_weight_multiply():
         torch.bfloat16
     )
     assert not torch.equal(actual, wrong)
+
+
+def test_expert_activation_rounds_after_fp32_silu_times_up():
+    kernel = Zonos2TritonExperts.__new__(Zonos2TritonExperts)
+    gate = torch.tensor([[0.023681640625]], dtype=torch.bfloat16)
+    up = torch.tensor([[-0.2197265625]], dtype=torch.bfloat16)
+    packed = torch.cat((gate, up), dim=-1)
+    before = packed.clone()
+    output = torch.empty_like(gate)
+    kernel.activation(MoEActivation.SILU, output, packed)
+    expected = torch.tensor([[-0.0026397705078125]], dtype=torch.bfloat16)
+    # Captured official BF16 value; an extra BF16 SiLU boundary changes it.
+    torch.testing.assert_close(output, expected, rtol=0, atol=0)
+    assert not torch.equal(torch.nn.functional.silu(gate) * up, expected)
+    torch.testing.assert_close(packed, before, rtol=0, atol=0)
+
+
+def test_expert_activation_rejects_non_zonos2_gate_function():
+    kernel = Zonos2TritonExperts.__new__(Zonos2TritonExperts)
+    with pytest.raises(ValueError, match="require SiLU"):
+        kernel.activation(MoEActivation.GELU, torch.empty(1, 1), torch.empty(1, 2))
+
+
+class _IdentityRotary(nn.Module):
+    def forward(self, positions, query, key):
+        return query, key
+
+
+class _CaptureKVLayout(nn.Module):
+    def forward(self, query, key, value):
+        self.key = key.detach().clone()
+        self.value = value.detach().clone()
+        self.key_stride = key.stride()
+        self.value_stride = value.stride()
+        assert key.is_contiguous()
+        assert value.is_contiguous()
+        return torch.zeros((query.shape[0], 4), dtype=query.dtype)
+
+
+def test_attention_materializes_value_after_split_for_native_cache_store():
+    attention = Zonos2Attention.__new__(Zonos2Attention)
+    nn.Module.__init__(attention)
+    attention.n_heads, attention.n_kv_heads, attention.head_dim = 2, 1, 2
+    attention.wq = nn.Linear(4, 4, bias=False)
+    attention.wkv = nn.Module()
+    attention.wkv.weight = nn.Parameter(torch.arange(16).reshape(2, 2, 4).float() / 8)
+    attention.wo = nn.Linear(4, 4, bias=False)
+    attention.gater = nn.Linear(4, 2, bias=False)
+    attention.temp = nn.Parameter(torch.ones(1, 2, 1))
+    attention.rotary = _IdentityRotary()
+    attention.attn = _CaptureKVLayout()
+    inputs = torch.arange(12).reshape(3, 4).float()
+    expected = torch.nn.functional.linear(inputs, attention.wkv.weight[1]).view(3, 1, 2)
+    attention(inputs, torch.arange(3))
+    torch.testing.assert_close(attention.attn.value, expected)
+    assert attention.attn.key_stride[0] == attention.attn.value_stride[0] == 2
+
+
+def test_cuda_norm_fake_kernels_preserve_shape_dtype_and_mutation_contract():
+    from torch._subclasses.fake_tensor import FakeTensorMode
+
+    from vllm_omni.model_executor.models.zonos2.zonos2_norm import (
+        zonos2_cuda_fused_add_rmsnorm,
+        zonos2_cuda_rmsnorm,
+    )
+
+    with FakeTensorMode():
+        hidden = torch.empty((3, 2048), device="cuda", dtype=torch.bfloat16)
+        residual = torch.empty_like(hidden)
+        weight = torch.empty(2048, device="cuda", dtype=torch.bfloat16)
+        output = zonos2_cuda_rmsnorm(hidden, weight, 1e-5)
+        assert output.shape == hidden.shape and output.dtype == hidden.dtype
+        assert output.device == hidden.device
+        assert zonos2_cuda_fused_add_rmsnorm(hidden, residual, weight, 1e-5) is None
