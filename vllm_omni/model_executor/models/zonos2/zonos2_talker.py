@@ -51,6 +51,21 @@ class _WeightModule(nn.Module):
         self.weight = nn.Parameter(torch.zeros(*shape))
 
 
+class Zonos2SpeakerLDAProjection(nn.Linear):
+    """Preserve the frozen LDA weight's column-major storage.
+
+    Safetensors stores its values contiguously, but the reference checkpoint
+    uses stride (1, out_features). That layout selects a different BF16 GEMM
+    reduction; rounding differences propagate through speaker conditioning.
+    """
+
+    weight: nn.Parameter
+
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__(in_features, out_features, bias=True)
+        self.weight = nn.Parameter(self.weight.detach().t().contiguous().t())
+
+
 class Zonos2RMSNorm(RMSNorm):
     """Keep the official FP32 residual sum through weighted normalization."""
 
@@ -373,6 +388,8 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
     prefer_model_sampler: bool = True
     has_postprocess: bool = True
 
+    _emb_norm_weight: torch.Tensor | None
+
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         hf_config = vllm_config.model_config.hf_config
@@ -383,6 +400,7 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         cfg = self.config
 
         self.multi_embedder = Zonos2MultiEmbedder(cfg)
+        self.register_buffer("_emb_norm_weight", None, persistent=False)
         _, _, self.layers = make_layers(
             cfg.n_layers,
             lambda prefix: Zonos2DecoderLayer(cfg, layer_id=int(prefix.split(".")[-1]), prefix=prefix),
@@ -392,7 +410,7 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         self.multi_output = nn.Linear(cfg.dim, cfg.n_codebooks * cfg.codebook_vocab_size, bias=False)
 
         # Speaker chain: Qwen3 voice embedding (2048) -> LDA (1024) -> hidden.
-        self.speaker_lda_projection = nn.Linear(cfg.speaker_embedding_dim, cfg.speaker_lda_dim, bias=True)
+        self.speaker_lda_projection = Zonos2SpeakerLDAProjection(cfg.speaker_embedding_dim, cfg.speaker_lda_dim)
         self.speaker_projection = nn.Linear(cfg.speaker_lda_dim, cfg.dim, bias=True)
 
         # LM lifecycle channel reuses the codebook-0 logits slice.
@@ -460,7 +478,16 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         # emb_norm: weight-free RMSNorm applied once at this common boundary,
         # whatever the embedding source (token ids / frame ids / inputs_embeds).
         # Callers producing inputs_embeds must NOT pre-normalize.
-        hidden = F.rms_norm(hidden, (self.config.dim,), eps=self.config.norm_eps)
+        # The reference weight-free norm also uses the CUDA JIT kernel;
+        # torch RMSNorm can differ by a BF16 rounding boundary.
+        if hidden.device.type == "cuda":
+            weight = self._emb_norm_weight
+            if weight is None or weight.dtype != hidden.dtype or weight.device != hidden.device:
+                weight = torch.ones(self.config.dim, dtype=hidden.dtype, device=hidden.device)
+                self._emb_norm_weight = weight
+            hidden = zonos2_cuda_rmsnorm(hidden, weight, self.config.norm_eps)
+        else:
+            hidden = F.rms_norm(hidden, (self.config.dim,), eps=self.config.norm_eps)
         prev_router_state: torch.Tensor | None = None
         residual: torch.Tensor | None = None
         for layer in self.layers:

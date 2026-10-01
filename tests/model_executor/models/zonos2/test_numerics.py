@@ -18,6 +18,7 @@ from vllm_omni.model_executor.models.zonos2.zonos2_talker import (
     Zonos2MoE,
     Zonos2RMSNorm,
     Zonos2RotaryEmbedding,
+    Zonos2SpeakerLDAProjection,
 )
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -212,3 +213,18 @@ def test_cuda_norm_fake_kernels_preserve_shape_dtype_and_mutation_contract():
         assert output.shape == hidden.shape and output.dtype == hidden.dtype
         assert output.device == hidden.device
         assert zonos2_cuda_fused_add_rmsnorm(hidden, residual, weight, 1e-5) is None
+
+
+def test_speaker_lda_preserves_reference_storage_after_loading_and_dtype_change():
+    projection = Zonos2SpeakerLDAProjection(4, 3)
+    values = torch.arange(12).reshape(3, 4).float() / 8
+    bias = torch.tensor([0.5, -0.5, 1.0])
+    projection.load_state_dict({"weight": values, "bias": bias})
+    projection.to(dtype=torch.bfloat16)
+    assert projection.weight.stride() == (1, 3)
+    assert set(dict(projection.named_parameters())) == {"weight", "bias"}
+    torch.testing.assert_close(projection.weight, values.to(torch.bfloat16), rtol=0, atol=0)
+    x = torch.tensor([[1, 2, 3, 4]], dtype=torch.bfloat16)
+    # Exact arithmetic for this small affine map, independent of the GEMM.
+    expected = torch.tensor([[3.0, 7.0, 13.5]], dtype=torch.bfloat16)
+    torch.testing.assert_close(projection(x), expected, rtol=0, atol=0)
