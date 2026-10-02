@@ -81,7 +81,11 @@ def summary(run: Path) -> dict:
         "dac_device_interval_ms": quantiles_ci([row["gpu_ms"] for row in dac]),
         "dac_host_ms": quantiles_ci([row["host_ms"] for row in dac]),
         "failures": [row["label"] for row in rows if row["reached_cap"]],
-        "stats_protocol": "2 warmups excluded; 3 repeats; request-level percentile bootstrap 2000 draws, seed42",
+        "stats_protocol": (
+            f"{sum(row['round'] < 0 for row in data['rows'])} warmup requests excluded; "
+            f"{len({row['round'] for row in rows})} measured rounds; "
+            "request-level percentile bootstrap 2000 draws, seed42"
+        ),
         "metric_boundary": (
             "Prepared-input offline driver. TTFC CPU-ready frame; TTFP CPU waveform ready. No HTTP/frontend costs."
         ),
