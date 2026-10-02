@@ -10,6 +10,7 @@ import torch
 
 from vllm_omni.data_entry_keys import CodesStruct, MetaStruct, OmniPayloadStruct
 from vllm_omni.model_executor.models.zonos2.zonos2_codec import eos_boundary, shear
+from vllm_omni.model_executor.models.zonos2.zonos2_keys import TARGET_FRAMES
 
 
 def _frames(audio: torch.Tensor) -> torch.Tensor:
@@ -51,7 +52,7 @@ def talker2dac(source_outputs: list[Any], prompt: Any = None, _requires_multimod
                 prompt_token_ids=[0],
                 additional_information={
                     "codes": {"audio": frames.T.contiguous()},
-                    "zonos2_target": _target(frames, mm.get("meta", {}), True),
+                    TARGET_FRAMES: _target(frames, mm.get("meta", {}), True),
                     "meta": {"finished": True, "chunk_seq": 0},
                 },
             )
@@ -78,8 +79,17 @@ def talker2dac_async_chunk(
         if len(frames) != len(new_token_ids):
             raise ValueError("ZONOS2 step frame/token count mismatch")
         buffer.extend(frames.unbind(0))
+    meta = mm.get("meta", {})
+    boundary = meta.get("eos_frame")
+    if boundary is not None:
+        boundary = int(boundary.reshape(-1)[-1]) if isinstance(boundary, torch.Tensor) else int(boundary)
+        target = len(buffer) if final else max(0, len(buffer) - 8)
+        if boundary >= 0:
+            target = min(target, boundary)
+        if not final and (target < 16 or target % 16 != 0):
+            return None
     frames = torch.stack(buffer) if buffer else torch.empty((0, 9), dtype=torch.long)
-    target = _target(frames, mm.get("meta", {}), final)
+    target = _target(frames, meta, final)
     if not final and (target < 16 or target % 16 != 0):
         return None
     payload = OmniPayloadStruct(

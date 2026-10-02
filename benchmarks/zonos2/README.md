@@ -78,6 +78,12 @@ python -m benchmarks.zonos2.summarize /owned/p6/native_c1 /owned/p6/official_c1 
   --out /owned/p6/performance.json
 ```
 
+The native driver accepts `--deploy-config vllm_omni/deploy/zonos2.yaml`
+to qualify the shipped B1 profile. Without this option it retains the P6
+benchmark stage overrides (`max_num_seqs=8`, 128-token chunked prefill).
+The effective configuration is saved in `result.json`; do not mix profiles
+when comparing timings.
+
 Quality uses local OpenAI Whisper large-v3 (T0, beam5) for English WER and
 Chinese CER. ASR output and spoken truth use NeMo TN, NFKC/punctuation rules;
 Chinese hypotheses are converted to simplified Chinese. This is not the

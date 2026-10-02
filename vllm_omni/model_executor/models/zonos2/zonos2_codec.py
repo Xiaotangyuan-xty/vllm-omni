@@ -71,8 +71,20 @@ class LocalDAC:
         try:
             torch.set_default_dtype(torch.float32)
             with torch.device("cpu"):
-                codec = dac.DAC.load(str(path), strict=True)
-        except Exception as exc:
+                # Reject executable module/package archives. Only tensors and
+                # primitive DAC constructor metadata may cross this boundary.
+                checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+                if not isinstance(checkpoint, dict):
+                    raise ValueError("DAC checkpoint must contain a tensor state dictionary")
+                metadata = checkpoint.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    raise ValueError("DAC checkpoint metadata must be a dictionary")
+                kwargs = metadata.get("kwargs", {})
+                if not isinstance(kwargs, dict) or not isinstance(checkpoint.get("state_dict"), dict):
+                    raise ValueError("DAC checkpoint needs metadata.kwargs and state_dict")
+                codec = dac.DAC(**kwargs)
+                codec.load_state_dict(checkpoint["state_dict"], strict=True)
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
             raise RuntimeError(f"Cannot load ZONOS2 DAC checkpoint {path}: {exc}") from exc
         finally:
             torch.set_default_dtype(old)
@@ -145,6 +157,7 @@ class DACStreamDecoder:
         if len(frames) < len(state.frames) or not torch.equal(frames[: len(state.frames)], state.frames):
             self.cleanup([key])
             raise ValueError("DAC cumulative frame history changed or regressed")
+        # The connector may reuse its snapshot storage on the next chunk.
         state.frames = frames.clone()
         state.sequence = sequence
         try:
@@ -159,6 +172,7 @@ class DACStreamDecoder:
                 start = state.decoded - overlap
                 end = min(target + 8, len(frames))
                 aligned = shear(frames[start:end], up=True)[: target - start]
+                # Own PCM before crossfade mutates it in place.
                 wav = self.decode(aligned.T.contiguous()).float().cpu().clone()
                 if overlap and state.tail is not None:
                     n = min(overlap * 512, len(state.tail), len(wav))

@@ -63,7 +63,6 @@ from vllm_omni.model_executor.models.glm_image.pipeline import GLM_IMAGE_PIPELIN
 from vllm_omni.model_executor.models.glm_tts.pipeline import GLM_TTS_PIPELINE
 from vllm_omni.model_executor.models.gr00t.pipeline import GR00T_N1D7_PIPELINE
 from vllm_omni.model_executor.models.higgs_audio_v2.pipeline import HIGGS_AUDIO_V2_PIPELINE
-from vllm_omni.model_executor.models.zonos2.pipeline import ZONOS2_PIPELINE
 from vllm_omni.model_executor.models.higgs_audio_v3.pipeline import HIGGS_AUDIO_V3_PIPELINE
 from vllm_omni.model_executor.models.hunyuan_image3.pipeline import (
     HUNYUAN_IMAGE3_AR_PIPELINE,
@@ -127,6 +126,7 @@ from vllm_omni.model_executor.models.voxcpm2.pipeline import VOXCPM2_PIPELINE
 from vllm_omni.model_executor.models.voxtral_tts.pipeline import VOXTRAL_TTS_PIPELINE
 from vllm_omni.model_executor.models.wan2_2.pipeline import WAN2_2_TI2V_PIPELINE
 from vllm_omni.model_executor.models.yue2.pipeline import YUE2_PIPELINE
+from vllm_omni.model_executor.models.zonos2.pipeline import ZONOS2_PIPELINE
 
 logger = init_logger(__name__)
 

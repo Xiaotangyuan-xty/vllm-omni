@@ -61,7 +61,12 @@ def test_stream_lengths_tail_flush_and_final_cleanup(n):
 def test_min_chunk_threshold(n):
     _, raw = delayed(n)
     calls = []
-    stream = DACStreamDecoder(lambda codes: calls.append(codes) or fake_decode(codes))
+
+    def decode(codes):
+        calls.append(codes)
+        return fake_decode(codes)
+
+    stream = DACStreamDecoder(decode)
     wav = stream.push("r", raw, final=False, target=n, sequence=0)
     assert len(calls) == int(n >= 16)
     assert wav.numel() == (n - 4) * 512 if n >= 16 else wav.numel() == 0
@@ -193,8 +198,12 @@ def test_corrupt_dac_checkpoint_and_dtype_restored(monkeypatch, tmp_path):
     path = tmp_path / "codec.pth"
     path.write_bytes(b"bad")
     monkeypatch.setenv("VLLM_ZONOS2_DAC_PATH", str(path))
-    fake = SimpleNamespace(DAC=SimpleNamespace(load=lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad"))))
-    monkeypatch.setitem(__import__("sys").modules, "dac", fake)
+
+    def fail(*args, **kwargs):
+        assert kwargs["weights_only"] is True
+        raise ValueError("bad")
+
+    monkeypatch.setattr(torch, "load", fail)
     old = torch.get_default_dtype()
     with pytest.raises(RuntimeError, match="Cannot load"):
         LocalDAC().load()
@@ -281,7 +290,7 @@ def test_decoder_uses_transport_final_and_target_not_runtime_generated_len():
 
     first = run()
     assert len(first["model_outputs"][0]) == 12 * 512
-    info["meta"].update(last_chunk=True, chunk_seq=1)
+    info["meta"] = {"last_chunk": True, "num_processed_tokens": 16, "chunk_seq": 1}
     last = run()
     assert len(last["model_outputs"][0]) == 4 * 512
     assert int(last["sr"][0]) == 44100
@@ -298,3 +307,14 @@ def test_decode_exception_drops_state():
     with pytest.raises(RuntimeError, match="codec error"):
         stream.push("r", raw, final=False, target=16, sequence=0)
     assert not stream.states and not stream.closed
+
+
+@pytest.mark.parametrize("metadata", [[], {"kwargs": []}])
+def test_invalid_checkpoint_metadata_restores_default_dtype(monkeypatch, tmp_path, metadata):
+    path = tmp_path / "invalid-metadata.pth"
+    torch.save({"metadata": metadata, "state_dict": {}}, path)
+    monkeypatch.setenv("VLLM_ZONOS2_DAC_PATH", str(path))
+    old = torch.get_default_dtype()
+    with pytest.raises(RuntimeError, match="Cannot load ZONOS2 DAC checkpoint"):
+        LocalDAC().load()
+    assert torch.get_default_dtype() == old

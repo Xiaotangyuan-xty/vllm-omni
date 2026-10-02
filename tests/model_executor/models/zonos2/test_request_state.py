@@ -210,3 +210,20 @@ def test_unsupported_capture_or_scheduler_modes_fail_before_allocating_model(asy
     )
     with pytest.raises(ValueError, match=message):
         Zonos2TalkerForConditionalGeneration(vllm_config=cfg)
+
+
+def test_decode_slices_one_frame_without_rebuilding_prompt_and_history(model, monkeypatch):
+    history = torch.arange(64 * 9, dtype=torch.int32).reshape(64, 9) % 1024
+    data = info("a", prompt_len=1000, offset=1063, history=history, count=64, max_tokens=128)
+    shapes = []
+    original = torch.cat
+
+    def counted(tensors, *args, **kwargs):
+        shapes.append([tuple(t.shape) for t in tensors])
+        return original(tensors, *args, **kwargs)
+
+    monkeypatch.setattr(torch, "cat", counted)
+    _, actual, _ = model.preprocess(torch.zeros(1, dtype=torch.int64), None, **data)
+    expected = original((history[-1:], torch.full((1, 1), 519, dtype=torch.int32)), dim=1)
+    torch.testing.assert_close(actual, model.multi_embedder(expected), rtol=0, atol=0)
+    assert shapes == [[(1, 9), (1, 1)]]

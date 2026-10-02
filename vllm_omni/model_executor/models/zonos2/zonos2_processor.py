@@ -11,6 +11,7 @@ from typing import Any
 import torch
 
 from vllm_omni.model_executor.models.zonos2.configuration_zonos2 import Zonos2Config
+from vllm_omni.model_executor.models.zonos2.zonos2_keys import FRAMES, SPEAKER_EMBEDDING, SPEAKER_POSITION
 from vllm_omni.model_executor.models.zonos2.zonos2_textnorm import Zonos2TextNormalizer
 
 # Frozen official 0.2s silence: 17 real frames, nine DAC codebooks.
@@ -33,10 +34,10 @@ class Zonos2Prompt:
     speaker_embedding: torch.Tensor | None = None
 
     def to_engine_prompt(self) -> dict[str, Any]:
-        info: dict[str, Any] = {"zonos2_frames": self.frames}
+        info: dict[str, Any] = {FRAMES: self.frames}
         if self.speaker_embedding is not None:
-            info["zonos2_speaker_embedding"] = self.speaker_embedding
-            info["zonos2_speaker_position"] = 0
+            info[SPEAKER_EMBEDDING] = self.speaker_embedding
+            info[SPEAKER_POSITION] = 0
         # One lifecycle id per frame; the full ten columns travel separately.
         return {"prompt_token_ids": self.frames[:, 9].tolist(), "additional_information": info}
 

@@ -101,7 +101,7 @@ def test_reference_audio_adapter_reuses_resolver_and_encoder():
     info = prepared.prompt["additional_information"]
     assert info["zonos2_speaker_embedding"].shape == (2048,)
     assert info["zonos2_frames"][0, 9] == 519
-    assert prepared.tts_params == {"ref_audio_cache_key": "reference-key"}
+    assert prepared.tts_params == {"ref_audio_cache_key": "reference-key", "zonos2_token_budget": 1024}
     assert len(called) == 1
 
 
@@ -224,7 +224,7 @@ def test_build_uses_the_p2_processor_without_a_hf_tokenizer():
     assert calls == ["中文 dummy."]
     assert prepared.model_type == "zonos2"
     assert prepared.prompt["additional_information"]["zonos2_frames"] == "sentinel"
-    assert prepared.tts_params == {}
+    assert prepared.tts_params == {"zonos2_token_budget": 16}
     assert request.input == "中文 dummy."
 
 
@@ -285,3 +285,15 @@ def test_quality_negative_ranges_and_outside_clamping(value, bucket):
     config.quality_buckets["lufs"] = [f"{low}-{low + 5}" for low in range(-60, 0, 5)]
     request = OpenAICreateSpeechRequest(input="Test", extra_params={"quality_values": {"lufs": value}})
     assert adapter._conditioning(request)["quality_buckets"][0] == bucket
+
+
+@pytest.mark.parametrize("finish,tokens", [("length", 10), ("stop", 1024)])
+def test_codec_budget_does_not_silently_return_truncated_speech(finish, tokens):
+    from vllm_omni.entrypoints.openai.tts_adapters.base import TTSGenerationError
+
+    with pytest.raises(TTSGenerationError, match="incomplete"):
+        _adapter().validate_generation({"zonos2_token_budget": 1024}, stage0_finish_reason=finish, output_tokens=tokens)
+
+
+def test_natural_eos_below_budget_is_valid():
+    _adapter().validate_generation({"zonos2_token_budget": 1024}, stage0_finish_reason="stop", output_tokens=300)

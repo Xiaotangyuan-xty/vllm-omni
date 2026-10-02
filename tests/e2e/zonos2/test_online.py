@@ -78,6 +78,19 @@ def test_real_http_nonstreaming_and_streaming(tmp_path):
             "/v1/audio/speech", json={"model": "zonos2-e2e", "input": "Test", "extra_params": {"emotion_cfg_scale": 2}}
         )
         assert invalid.status_code == 400
+        capped = client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "zonos2-e2e",
+                "input": "A sentence deliberately constrained by a tiny codec budget.",
+                "max_new_tokens": 16,
+                "seed": 42,
+                "response_format": "wav",
+            },
+        )
+        assert capped.status_code >= 400
+        assert "incomplete" in capped.text
+
     (directory / "summary.json").write_text(
         json.dumps(
             {"status": "pass", "real_weights": True, "reference_source": "vendored data URI", "cases": reports},

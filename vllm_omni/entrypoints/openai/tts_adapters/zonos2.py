@@ -4,15 +4,21 @@
 
 from __future__ import annotations
 
-import copy
 import math
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from vllm.utils.async_utils import make_async
 
 from vllm_omni.entrypoints.openai.tts_adapters import register_tts_adapter
-from vllm_omni.entrypoints.openai.tts_adapters.base import ARTTSAdapter, PreparedRequest, apply_max_new_tokens
+from vllm_omni.entrypoints.openai.tts_adapters.base import (
+    ARTTSAdapter,
+    PreparedRequest,
+    TTSGenerationError,
+    apply_max_new_tokens,
+)
+from vllm_omni.model_executor.models.zonos2.zonos2_keys import STATE, TOKEN_BUDGET
 
 if TYPE_CHECKING:
     from vllm_omni.entrypoints.openai.protocol.audio import OpenAICreateSpeechRequest
@@ -90,12 +96,13 @@ _CONDITIONING = frozenset(
 
 @register_tts_adapter
 class Zonos2Adapter(ARTTSAdapter):
-    name = "zonos2"
-    stage_keys = frozenset({"zonos2"})
+    name = STATE
+    stage_keys = frozenset({STATE})
     model_archs = frozenset({"Zonos2ForConditionalGeneration", "Zonos2TalkerForConditionalGeneration"})
     supported_output_sample_rates = frozenset({44100})
     max_new_tokens_max = 1024
     native_speed_control = True
+    validates_generation = True
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -106,11 +113,14 @@ class Zonos2Adapter(ARTTSAdapter):
         from vllm_omni.model_executor.models.zonos2.zonos2_processor import Zonos2Processor
 
         if self._processor is None:
-            self._processor = Zonos2Processor(self.ctx.engine_client.model_config.hf_config)
+            engine_client = self.ctx.engine_client
+            if engine_client is None:
+                raise RuntimeError("ZONOS2 processor requires an initialized engine client")
+            self._processor = Zonos2Processor(engine_client.model_config.hf_config)
         return self._processor
 
-    def _load_supported_speakers(self) -> set[str]:
-        return {"default"}
+    def _load_supported_speakers(self) -> list[str]:
+        return ["default"]
 
     def _load_supported_languages(self) -> frozenset[str]:
         return frozenset(_LANGUAGES)
@@ -244,13 +254,32 @@ class Zonos2Adapter(ARTTSAdapter):
         prompt: dict[str, Any] | None = None,
         request_id: str | None = None,
     ) -> list:
-        params = copy.deepcopy(apply_max_new_tokens(sampling_params_list, request))
+        params = apply_max_new_tokens(sampling_params_list, request)
+        if params is sampling_params_list:
+            params = [param.clone() for param in sampling_params_list]
         if params:
             params[0].extra_args = {k: v for k, v in (params[0].extra_args or {}).items() if k not in _CONDITIONING}
             params[0].extra_args.update({k: v for k, v in (request.extra_params or {}).items() if k in _SAMPLING})
             if request.seed is not None:
                 params[0].seed = request.seed
         return params
+
+    def validate_generation(
+        self,
+        tts_params: Mapping[str, object],
+        *,
+        stage0_finish_reason: str | None,
+        output_tokens: int,
+    ) -> None:
+        budget = tts_params.get(TOKEN_BUDGET)
+        if not isinstance(budget, int) or budget <= 0:
+            return
+        if stage0_finish_reason == "length" or output_tokens >= budget:
+            raise TTSGenerationError(
+                f"ZONOS2 reached its codec-frame budget ({output_tokens}/{budget}); "
+                "the generated speech may be incomplete. Increase the budget or use a shorter input.",
+                retryable=True,
+            )
 
     async def build(
         self, request: OpenAICreateSpeechRequest, sampling_params_list: list, has_inline_ref_audio: bool
@@ -260,7 +289,10 @@ class Zonos2Adapter(ARTTSAdapter):
             raise ValueError(error)
         executor = getattr(self.ctx.server, "_tts_executor", None)
         kwargs = self._conditioning(request)
-        tts_params = {}
+        budget = request.max_new_tokens
+        if budget is None:
+            budget = sampling_params_list[0].max_tokens if sampling_params_list else 1024
+        tts_params = {TOKEN_BUDGET: budget}
         if request.speaker_embedding is not None:
             import torch
 
@@ -270,7 +302,7 @@ class Zonos2Adapter(ARTTSAdapter):
 
             try:
                 wav, sr, key = await self.ctx.server._resolve_ref_audio(request.ref_audio)
-            except Exception as exc:
+            except (OSError, ValueError, RuntimeError) as exc:
                 raise ValueError(
                     "Cannot decode ZONOS2 reference audio; check the audio input and installed audio backend/ffmpeg"
                 ) from exc

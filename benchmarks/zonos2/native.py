@@ -29,10 +29,16 @@ async def run(args):
     from vllm_omni.entrypoints.async_omni import AsyncOmni
 
     args.out.mkdir(parents=True, exist_ok=True)
-    config_path = deployment(args.out, streaming=not args.sync)
-    config = yaml.safe_load(config_path.read_text())
-    for stage in config["stages"]:
-        stage["max_num_seqs"] = 8
+    if args.deploy_config is None:
+        config_path = deployment(args.out, streaming=not args.sync)
+        config = yaml.safe_load(config_path.read_text())
+        for stage in config["stages"]:
+            stage["max_num_seqs"] = 8
+    else:
+        config = yaml.safe_load(args.deploy_config.read_text())
+        config["async_chunk"] = not args.sync
+        config["connectors"]["connector_of_shared_memory"]["extra"]["codec_streaming"] = not args.sync
+        config_path = args.out / "deploy.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=False))
     bundles = [torch.load(path, weights_only=True) for path in sorted(args.inputs.glob("*.pt"))]
     if args.profile:
@@ -146,6 +152,8 @@ async def run(args):
         "rows": rows,
         "waves": waves,
         "torch": torch.__version__,
+        "deploy_config": config,
+        "source_deploy_config": str(args.deploy_config) if args.deploy_config else None,
     }
     (args.out / "result.json").write_text(json.dumps(report, indent=2))
     print("NATIVE_BENCH_DONE", args.out, flush=True)
@@ -156,6 +164,7 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--deploy-config", type=Path, help="Measure this profile without benchmark stage overrides")
     parser.add_argument("--concurrency", type=int, choices=(1, 4, 8), default=1)
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--sync", action="store_true")

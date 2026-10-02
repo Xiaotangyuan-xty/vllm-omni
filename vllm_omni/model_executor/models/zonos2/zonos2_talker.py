@@ -38,6 +38,14 @@ from vllm.v1.outputs import SamplerOutput
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.models.zonos2.configuration_zonos2 import Zonos2Config
+from vllm_omni.model_executor.models.zonos2.zonos2_keys import (
+    FRAMES,
+    SCHEDULED_SPAN,
+    SPEAKER_EMBEDDING,
+    SPEAKER_POSITION,
+    STATE,
+    TERMINAL,
+)
 from vllm_omni.model_executor.models.zonos2.zonos2_moe import Zonos2TritonExperts
 from vllm_omni.model_executor.models.zonos2.zonos2_norm import (
     zonos2_cuda_fused_add_rmsnorm,
@@ -401,7 +409,7 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
     requires_request_sample_eligibility: bool = True
     postprocess_uses_hidden_states: bool = False
     postprocess_uses_multimodal_outputs: bool = False
-    gpu_resident_buffer_keys = {("zonos2", key) for key in ("history", "eos_frame", "countdown", "stopped")}
+    gpu_resident_buffer_keys = {(STATE, key) for key in ("history", "eos_frame", "countdown", "stopped")}
 
     _emb_norm_weight: torch.Tensor | None
 
@@ -498,7 +506,7 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         params = Zonos2SamplingParams.from_runtime(info["_omni_sampling_params"])
         offset = int(info["_omni_num_computed_tokens"])
         span = input_ids.shape[0]
-        saved = info.get("zonos2") or {}
+        saved = info.get(STATE) or {}
         previous = self._request_states.get(key)
         history = saved.get("history")
         if history is None:
@@ -524,20 +532,25 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
             self._request_states[key] = state
         else:
             state = previous
-        generated = torch.cat(
-            (
-                history,
-                torch.full((len(history), 1), self.config.text_vocab, device=input_ids.device, dtype=history.dtype),
-            ),
-            dim=1,
-        )
-        stream = torch.cat((frames.to(device=input_ids.device), generated), dim=0)
-        if offset < 0 or offset + span > len(stream):
+        prompt_length = len(frames)
+        if offset < 0 or offset + span > prompt_length + len(history):
             raise ValueError("Scheduled replay span exceeds prompt plus full code history")
-        selected = stream[offset : offset + span]
+        # Slice before device transfer and concatenate only a crossing span.
+        # Ordinary decode consumes one prior frame, not a rebuilt P+H stream.
+        pieces = []
+        if offset < prompt_length:
+            stop = min(offset + span, prompt_length)
+            pieces.append(frames[offset:stop].to(device=input_ids.device))
+        if offset + span > prompt_length:
+            start = max(0, offset - prompt_length)
+            stop = offset + span - prompt_length
+            audio = history[start:stop]
+            text = torch.full((len(audio), 1), self.config.text_vocab, device=audio.device, dtype=audio.dtype)
+            pieces.append(torch.cat((audio, text), dim=1))
+        selected = pieces[0] if len(pieces) == 1 else torch.cat(pieces, dim=0)
         hidden = self._embed_input_ids(selected)
-        speaker = info.get("zonos2_speaker_embedding")
-        position = int(info.get("zonos2_speaker_position", 0))
+        speaker = info.get(SPEAKER_EMBEDDING)
+        position = int(info.get(SPEAKER_POSITION, 0))
         if speaker is not None and offset <= position < offset + span:
             hidden = self._inject_speaker(
                 hidden,
@@ -549,9 +562,9 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
             hidden,
             {
                 "_omni_req_id": key,
-                "_zonos2_scheduled_span": span,
-                "_zonos2_terminal": terminal,
-                "zonos2": state.payload(),
+                SCHEDULED_SPAN: span,
+                TERMINAL: terminal,
+                STATE: state.payload(),
             },
         )
 
@@ -564,7 +577,7 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         prefill needs no model-owned cursor. Decode reads the existing
         per-request codes.audio payload; sampling/EOS logic is unchanged.
         """
-        frames = info.get("zonos2_frames")
+        frames = info.get(FRAMES)
         if frames is None:
             # Retain the P1 numeric-id skeleton and direct legacy callers.
             return input_ids, self._embed_input_ids(input_ids), {}
@@ -602,9 +615,9 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
                 dim=1,
             )
         hidden = self._embed_input_ids(selected)
-        speaker = info.get("zonos2_speaker_embedding")
+        speaker = info.get(SPEAKER_EMBEDDING)
         if is_prefill and speaker is not None:
-            position = int(info.get("zonos2_speaker_position", 0))
+            position = int(info.get(SPEAKER_POSITION, 0))
             if offset <= position < offset + span:
                 if not isinstance(speaker, torch.Tensor):
                     raise TypeError("zonos2_speaker_embedding must be a tensor")
@@ -628,13 +641,9 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
     ) -> torch.Tensor:
         infos = kwargs.get("model_intermediate_buffer") or kwargs.get("runtime_additional_information") or []
         eligible = kwargs.get("request_sample_eligible")
-        if (
-            infos
-            and any("zonos2_frames" in i for i in infos)
-            and not all("_omni_req_id" in i and "zonos2_frames" in i for i in infos)
-        ):
+        if infos and any(FRAMES in i for i in infos) and not all("_omni_req_id" in i and FRAMES in i for i in infos):
             raise ValueError("ZONOS2 cannot mix legacy numeric prompts with request-local framed prompts")
-        if infos and all("_omni_req_id" in i and "zonos2_frames" in i for i in infos):
+        if infos and all("_omni_req_id" in i and FRAMES in i for i in infos):
             self._sampling_plan = [
                 (str(info["_omni_req_id"]), bool(eligible[i]) if eligible is not None else True, info)
                 for i, info in enumerate(infos)
@@ -713,17 +722,13 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
                 if not eligible:
                     continue  # partial replay/prefill must not emit or consume RNG
                 state = self._request_states[key]
-                if info.get("_zonos2_terminal"):
+                if info.get(TERMINAL):
                     lifecycle[index, 0] = STOP_TOKEN
                     if self._step_payload is not None:
                         self._step_payload["meta"]["eos_frame"][index] = state.eos_frame.reshape(1)
                         self._step_payload["meta"]["is_final"][index] = state.stopped.reshape(1)
                     continue
-                target = (
-                    int(info["_omni_num_computed_tokens"])
-                    + int(info.get("_zonos2_scheduled_span", 1))
-                    - len(info["zonos2_frames"])
-                )
+                target = int(info["_omni_num_computed_tokens"]) + int(info.get(SCHEDULED_SPAN, 1)) - len(info[FRAMES])
                 if target != len(state.history):
                     raise ValueError("ZONOS2 sampler history is inconsistent with scheduled position")
                 row = sample_frame(fused[index], state.history, state.params, state.seed, len(state.history))
@@ -745,7 +750,7 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
             state = self._request_states.get(key)
             if state is None or key not in self._step_codes:
                 return {}
-            return {"codes": {"audio": self._step_codes[key]}, "zonos2": state.payload()}
+            return {"codes": {"audio": self._step_codes[key]}, STATE: state.payload()}
         codes = getattr(self, "_last_audio_codes", None)
         if codes is None:
             return {}

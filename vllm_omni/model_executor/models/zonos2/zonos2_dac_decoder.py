@@ -12,6 +12,7 @@ from vllm.config import VllmConfig
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.models.zonos2.zonos2_codec import DACStreamDecoder, LocalDAC, eos_boundary
+from vllm_omni.model_executor.models.zonos2.zonos2_keys import TARGET_FRAMES
 
 
 class Zonos2Code2WavForConditionalGeneration(nn.Module):
@@ -44,7 +45,7 @@ class Zonos2Code2WavForConditionalGeneration(nn.Module):
         return [
             {
                 "codes": {"audio": torch.zeros((9, 24), dtype=torch.long)},
-                "zonos2_target": 16,
+                TARGET_FRAMES: 16,
                 "meta": {"finished": True},
             }
             for _ in range(num_reqs)
@@ -80,7 +81,7 @@ class Zonos2Code2WavForConditionalGeneration(nn.Module):
                     raise ValueError("ZONOS2 stage payload requires [9,T] raw codes")
                 frames = codes.T.to(device="cpu", dtype=torch.long)
                 final = bool(meta.get("last_chunk", meta.get("finished", True)))
-                target = info.get("zonos2_target", meta.get("num_processed_tokens"))
+                target = info.get(TARGET_FRAMES, meta.get("num_processed_tokens"))
                 if target is None:
                     eos = eos_boundary(frames)
                     target = len(frames) if final else max(0, len(frames) - 8)
