@@ -126,6 +126,9 @@ class Zonos2Config(PretrainedConfig):
         self.frame_width = n_codebooks + 1
 
         super().__init__(**kwargs)
+        # One scheduler token per frame. The continue/stop sentinels and all
+        # prompt text-column IDs must be within the declared lifecycle vocab.
+        self.vocab_size = self.codebook_vocab_size
 
     def router_topk(self, layer_id: int) -> int:
         """Top-k for the MoE router at ``layer_id`` (layer 26 uses top-2)."""

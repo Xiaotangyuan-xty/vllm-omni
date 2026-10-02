@@ -3,8 +3,8 @@
 """ZONOS2 registration and dummy-weight speech serving skeleton.
 
 The P2-01 processor constructs canonical normalized text frames. Serving still
-requires an explicitly dummy-loaded two-stage pipeline until the request-local
-sampler and real DAC milestones land; its returned waveform remains silent.
+requires an explicitly dummy-loaded two-stage pipeline until the real DAC
+milestone lands; its returned waveform remains silent.
 """
 
 from __future__ import annotations
@@ -20,7 +20,19 @@ if TYPE_CHECKING:
     from vllm_omni.entrypoints.openai.protocol.audio import OpenAICreateSpeechRequest
 
 _SKELETON_FIELDS = frozenset(
-    {"input", "model", "voice", "response_format", "speed", "stream", "stream_format", "max_new_tokens", "sample_rate"}
+    {
+        "input",
+        "model",
+        "voice",
+        "response_format",
+        "speed",
+        "stream",
+        "stream_format",
+        "max_new_tokens",
+        "sample_rate",
+        "seed",
+        "extra_params",
+    }
 )
 
 
@@ -78,6 +90,25 @@ class Zonos2Adapter(ARTTSAdapter):
             return "ZONOS2 dummy validation only supports non-streaming requests"
         if request.response_format not in ("wav", "pcm"):
             return "ZONOS2 dummy validation only supports response_format='wav' or 'pcm'"
+        if request.extra_params:
+            from vllm_omni.model_executor.models.zonos2.zonos2_sampler import Zonos2SamplingParams
+
+            allowed = {
+                "temperature",
+                "top_k",
+                "top_p",
+                "min_p",
+                "repetition_window",
+                "repetition_penalty",
+                "repetition_codebooks",
+            }
+            unknown = set(request.extra_params) - allowed
+            if unknown:
+                return f"Unsupported ZONOS2 sampling parameters: {sorted(unknown)}"
+            try:
+                Zonos2SamplingParams.from_runtime({"extra_args": request.extra_params})
+            except (ValueError, TypeError) as exc:
+                return str(exc)
         for field in sorted(request.model_fields_set - _SKELETON_FIELDS):
             if getattr(request, field) is not None:
                 return f"ZONOS2 dummy validation does not support '{field}'"

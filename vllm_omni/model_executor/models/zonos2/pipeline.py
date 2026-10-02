@@ -32,6 +32,7 @@ ZONOS2_PIPELINE = PipelineConfig(
             # stream is a lifecycle channel only.
             sampling_constraints={
                 "detokenize": False,
+                "stop_token_ids": [1],
             },
         ),
         StagePipelineConfig(

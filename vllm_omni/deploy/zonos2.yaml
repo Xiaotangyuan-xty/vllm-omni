@@ -43,6 +43,7 @@ stages:
       temperature: 1.15
       top_k: 106
       min_p: 0.18
+      repetition_penalty: 1.2
       top_p: 1.0
       max_tokens: 1024
       seed: 42

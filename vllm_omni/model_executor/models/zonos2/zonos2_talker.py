@@ -15,8 +15,9 @@ Numerical backbone scope:
     present and get numerically validated in M2a.
   * The sonic EDA router preserves canonical checkpoint parameters while
     expert computation uses vLLM's fused MoE kernels.
-  * The model-owned sampler still uses argmax. Request-local sampling,
-    delay/EOA countdown, and state reconstruction remain M3 work.
+  * Sampling is request-local with independent controls and reproducible
+    replay from the complete nine-codebook history; lifecycle tokens carry
+    continue/stop only, while multimodal output carries the codec frames.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.rotary_embedding.base import RotaryEmbedding
 from vllm.model_executor.models.utils import make_layers
+from vllm.v1.outputs import SamplerOutput
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.models.zonos2.configuration_zonos2 import Zonos2Config
@@ -40,6 +42,13 @@ from vllm_omni.model_executor.models.zonos2.zonos2_moe import Zonos2TritonExpert
 from vllm_omni.model_executor.models.zonos2.zonos2_norm import (
     zonos2_cuda_fused_add_rmsnorm,
     zonos2_cuda_rmsnorm,
+)
+from vllm_omni.model_executor.models.zonos2.zonos2_sampler import (
+    CONTINUE_TOKEN,
+    STOP_TOKEN,
+    Zonos2RequestState,
+    Zonos2SamplingParams,
+    sample_frame,
 )
 
 
@@ -388,11 +397,22 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
     prefer_model_sampler: bool = True
     has_postprocess: bool = True
     has_preprocess: bool = True
+    requires_request_sampling_params: bool = True
+    requires_request_sample_eligibility: bool = True
+    postprocess_uses_hidden_states: bool = False
+    postprocess_uses_multimodal_outputs: bool = False
+    gpu_resident_buffer_keys = {("zonos2", key) for key in ("history", "eos_frame", "countdown", "stopped")}
 
     _emb_norm_weight: torch.Tensor | None
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
+        if vllm_config.scheduler_config.async_scheduling:
+            raise ValueError("ZONOS2 request-local sampling currently requires async_scheduling=False")
+        if vllm_config.cache_config.enable_prefix_caching:
+            raise ValueError("ZONOS2 codec-history replay currently requires enable_prefix_caching=False")
+        if not vllm_config.model_config.enforce_eager:
+            raise ValueError("ZONOS2 request-local sampling currently requires enforce_eager=True")
         hf_config = vllm_config.model_config.hf_config
         if isinstance(hf_config, Zonos2Config):
             self.config = hf_config
@@ -419,6 +439,10 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
 
         self._last_audio_codes: torch.Tensor | None = None
         self._postprocess_cursor: int = 0
+        self._request_states: dict[str, Zonos2RequestState] = {}
+        self._sampling_plan: list[tuple[str, bool, dict[str, Any]]] = []
+        self._step_codes: dict[str, torch.Tensor] = {}
+        self._step_payload: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ embed
     def _embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -457,6 +481,80 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         speaker = self.speaker_projection(speaker).to(dtype=hidden.dtype)
         return hidden.index_copy(0, speaker_positions.to(device=hidden.device, dtype=torch.long), speaker)
 
+    def on_requests_finished(self, finished_req_ids: Iterable[str]) -> None:
+        """The runner sends the same IDs for finish, cancellation and abort."""
+        finished = {str(rid) for rid in finished_req_ids}
+        for key in finished:
+            self._request_states.pop(key, None)
+            self._step_codes.pop(key, None)
+        self._sampling_plan = [p for p in self._sampling_plan if p[0] not in finished]
+        if not self._sampling_plan:
+            self._step_payload = None
+
+    def _managed_preprocess(
+        self, input_ids: torch.Tensor, frames: torch.Tensor, info: dict[str, Any]
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+        key = str(info.get("_omni_req_id") or info["request_id"])
+        params = Zonos2SamplingParams.from_runtime(info["_omni_sampling_params"])
+        offset = int(info["_omni_num_computed_tokens"])
+        span = input_ids.shape[0]
+        saved = info.get("zonos2") or {}
+        previous = self._request_states.get(key)
+        history = saved.get("history")
+        if history is None:
+            history = (
+                previous.history
+                if previous is not None
+                else torch.empty((0, 9), device=input_ids.device, dtype=torch.int32)
+            )
+        if not isinstance(history, torch.Tensor):
+            raise TypeError("ZONOS2 reconstruction needs full tensor code history")
+        history = history.to(device=input_ids.device)
+        lifecycle_history = info.get("_omni_output_token_ids", ())
+        committed = len(lifecycle_history)
+        terminal = bool(committed and lifecycle_history[-1] == STOP_TOKEN) or committed >= params.max_tokens
+        if committed > len(history):
+            raise ValueError("Cannot reconstruct nine-codebook history from lifecycle token ids alone")
+        history = history[:committed]
+        # Absolute replay offset and full code history are authoritative. No
+        # prompt-only reset, slot key or incremental global cursor is used.
+        if offset == 0 or previous is None or len(previous.history) != committed or previous.params != params:
+            seed = params.seed if params.seed is not None else saved.get("seed", previous.seed if previous else None)
+            state = Zonos2RequestState.rebuild(key, params, history, seed)
+            self._request_states[key] = state
+        else:
+            state = previous
+        generated = torch.cat(
+            (
+                history,
+                torch.full((len(history), 1), self.config.text_vocab, device=input_ids.device, dtype=history.dtype),
+            ),
+            dim=1,
+        )
+        stream = torch.cat((frames.to(device=input_ids.device), generated), dim=0)
+        if offset < 0 or offset + span > len(stream):
+            raise ValueError("Scheduled replay span exceeds prompt plus full code history")
+        selected = stream[offset : offset + span]
+        hidden = self._embed_input_ids(selected)
+        speaker = info.get("zonos2_speaker_embedding")
+        position = int(info.get("zonos2_speaker_position", 0))
+        if speaker is not None and offset <= position < offset + span:
+            hidden = self._inject_speaker(
+                hidden,
+                speaker.reshape(1, -1),
+                torch.tensor([position - offset], device=input_ids.device, dtype=torch.long),
+            )
+        return (
+            input_ids,
+            hidden,
+            {
+                "_omni_req_id": key,
+                "_zonos2_scheduled_span": span,
+                "_zonos2_terminal": terminal,
+                "zonos2": state.payload(),
+            },
+        )
+
     def preprocess(
         self, input_ids: torch.Tensor, input_embeds: torch.Tensor | None, **info: Any
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
@@ -472,6 +570,12 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
             return input_ids, self._embed_input_ids(input_ids), {}
         if not isinstance(frames, torch.Tensor) or frames.ndim != 2 or frames.shape[1] != 10:
             raise ValueError("zonos2_frames must have shape [T,10]")
+        if "_omni_sampling_params" in info and ("_omni_req_id" in info or "request_id" in info):
+            try:
+                return self._managed_preprocess(input_ids, frames, info)
+            except Exception:
+                self.on_requests_finished([str(info.get("_omni_req_id") or info["request_id"])])
+                raise
         offset = int(info["_omni_num_computed_tokens"])
         is_prefill = bool(info["_omni_is_prefill"])
         if offset < 0:
@@ -522,6 +626,23 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         speaker_positions: torch.Tensor | None = None,
         **kwargs: Any,
     ) -> torch.Tensor:
+        infos = kwargs.get("model_intermediate_buffer") or kwargs.get("runtime_additional_information") or []
+        eligible = kwargs.get("request_sample_eligible")
+        if (
+            infos
+            and any("zonos2_frames" in i for i in infos)
+            and not all("_omni_req_id" in i and "zonos2_frames" in i for i in infos)
+        ):
+            raise ValueError("ZONOS2 cannot mix legacy numeric prompts with request-local framed prompts")
+        if infos and all("_omni_req_id" in i and "zonos2_frames" in i for i in infos):
+            self._sampling_plan = [
+                (str(info["_omni_req_id"]), bool(eligible[i]) if eligible is not None else True, info)
+                for i, info in enumerate(infos)
+            ]
+        else:
+            self._sampling_plan = []
+        self._step_codes = {}
+        self._step_payload = None
         if inputs_embeds is None:
             hidden = self._embed_input_ids(input_ids)
         else:
@@ -574,75 +695,94 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         teacher-forced parity harness so tests never touch private state."""
         return getattr(self, "_last_fused_logits", None)
 
-    def sample(self, logits: torch.Tensor, sampling_metadata: Any) -> None:
-        """Model-owned 9-codebook sampler (M1: argmax; per-request params in M3).
-
-        Stores ``self._last_audio_codes`` [num_requests, 9] and returns None so
-        the runner falls back to the default sampler for the LM lifecycle token.
-        """
-        fused = getattr(self, "_last_fused_logits", None)
+    def sample(self, logits: torch.Tensor, sampling_metadata: Any) -> SamplerOutput | None:
+        fused = self.fused_audio_logits()
         if fused is None:
-            self._last_audio_codes = None
             return None
-        codes = fused.argmax(dim=-1)  # [N, 9]
-        self._last_audio_codes = codes.to(torch.long)
-        self._postprocess_cursor = 0
-        return None
+        plan = getattr(self, "_sampling_plan", [])
+        if not plan:
+            # Numerical parity and engine warmup have no request context.
+            self._last_audio_codes = fused.argmax(-1).to(torch.long)
+            self._postprocess_cursor = 0
+            return None
+        if len(plan) != fused.shape[0]:
+            raise ValueError("ZONOS2 sampling rows must match stable request IDs")
+        lifecycle = torch.full((len(plan), 1), CONTINUE_TOKEN, device=fused.device, dtype=torch.int64)
+        try:
+            for index, (key, eligible, info) in enumerate(plan):
+                if not eligible:
+                    continue  # partial replay/prefill must not emit or consume RNG
+                state = self._request_states[key]
+                if info.get("_zonos2_terminal"):
+                    lifecycle[index, 0] = STOP_TOKEN
+                    if self._step_payload is not None:
+                        self._step_payload["meta"]["eos_frame"][index] = state.eos_frame.reshape(1)
+                        self._step_payload["meta"]["is_final"][index] = state.stopped.reshape(1)
+                    continue
+                target = (
+                    int(info["_omni_num_computed_tokens"])
+                    + int(info.get("_zonos2_scheduled_span", 1))
+                    - len(info["zonos2_frames"])
+                )
+                if target != len(state.history):
+                    raise ValueError("ZONOS2 sampler history is inconsistent with scheduled position")
+                row = sample_frame(fused[index], state.history, state.params, state.seed, len(state.history))
+                lifecycle[index, 0] = state.append(row)
+                self._step_codes[key] = row.reshape(1, 9)
+                if self._step_payload is not None:
+                    self._step_payload["codes"]["audio"][index] = row.reshape(1, 9)
+                    self._step_payload["meta"]["eos_frame"][index] = state.eos_frame.reshape(1)
+                    self._step_payload["meta"]["is_final"][index] = state.stopped.reshape(1)
+            return SamplerOutput(sampled_token_ids=lifecycle, logprobs_tensors=None)
+        except Exception:
+            self.on_requests_finished([p[0] for p in plan])
+            raise
 
     def postprocess(self, hidden_states_slice: torch.Tensor, multimodal_outputs: Any = None, **req_infos: Any) -> dict:
-        """Publish this step's codes row for one request (incremental, not cumulative)."""
-        codes_full = getattr(self, "_last_audio_codes", None)
-        if codes_full is None:
+        key = req_infos.get("_omni_req_id")
+        if key is not None:
+            key = str(key)
+            state = self._request_states.get(key)
+            if state is None or key not in self._step_codes:
+                return {}
+            return {"codes": {"audio": self._step_codes[key]}, "zonos2": state.payload()}
+        codes = getattr(self, "_last_audio_codes", None)
+        if codes is None:
             return {}
         cursor = int(getattr(self, "_postprocess_cursor", 0))
-        if cursor >= int(codes_full.shape[0]):
-            self._postprocess_cursor = 0
+        if cursor >= len(codes):
             return {}
-        slice_codes = codes_full[cursor : cursor + 1]
         self._postprocess_cursor = cursor + 1
-        return {"codes": {"audio": slice_codes.to(torch.int32)}}
+        return {"codes": {"audio": codes[cursor : cursor + 1].to(torch.int32)}}
 
     def make_omni_output(self, model_outputs: Any, **kwargs: Any) -> OmniOutput:
-        """Wrap decoder outputs into the OmniOutput contract.
-
-        The runner threads per-request ``codes.audio`` (published by
-        ``postprocess``) into ``model_intermediate_buffer`` in batch order;
-        assemble them into the multimodal payload Stage 1 consumes.
-        """
         if isinstance(model_outputs, OmniOutput):
             return model_outputs
-        hidden = model_outputs
-
-        info_dicts = kwargs.get("model_intermediate_buffer")
-        if info_dicts is None:
-            info_dicts = kwargs.get("runtime_additional_information")
-        if info_dicts is None:
-            info_dicts = []
-
-        audio_codes_list: list[torch.Tensor] = []
-        any_nonempty = False
-        for info in info_dicts:
-            ac: torch.Tensor | None = None
-            if isinstance(info, dict):
-                codes_field = info.get("codes")
-                if isinstance(codes_field, dict):
-                    ac = codes_field.get("audio")
-                else:
-                    ac = info.get("audio_codes")
-            if isinstance(ac, torch.Tensor) and ac.numel() > 0:
-                audio_codes_list.append(ac)
-                any_nonempty = True
-            else:
-                # keep list length == batch size so per-request indexing never
-                # falls back to element[0] for higher slots
-                audio_codes_list.append(torch.empty(0, dtype=torch.long))
-
-        if any_nonempty:
+        plan = getattr(self, "_sampling_plan", [])
+        if plan:
+            # Runner retains this payload by reference until its post-sampling
+            # output builder. sample() fills these row-aligned slots in the same
+            # step, including the terminal frame; no one-step output lag.
+            self._step_payload = {
+                "codes": {"audio": [model_outputs.new_empty((0, 9), dtype=torch.int32) for _ in plan]},
+                "meta": {
+                    "eos_frame": [model_outputs.new_full((1,), -1, dtype=torch.long) for _ in plan],
+                    "is_final": [model_outputs.new_zeros((1,), dtype=torch.bool) for _ in plan],
+                },
+            }
+            return OmniOutput(text_hidden_states=model_outputs, multimodal_outputs=self._step_payload)
+        infos = kwargs.get("model_intermediate_buffer") or kwargs.get("runtime_additional_information") or []
+        codes = [(info.get("codes") or {}).get("audio") for info in infos]
+        if any(isinstance(c, torch.Tensor) and c.numel() for c in codes):
             return OmniOutput(
-                text_hidden_states=hidden,
-                multimodal_outputs={"codes": {"audio": audio_codes_list}},
+                text_hidden_states=model_outputs,
+                multimodal_outputs={
+                    "codes": {
+                        "audio": [c if isinstance(c, torch.Tensor) else torch.empty(0, dtype=torch.long) for c in codes]
+                    }
+                },
             )
-        return OmniOutput(text_hidden_states=hidden, multimodal_outputs={})
+        return OmniOutput(text_hidden_states=model_outputs, multimodal_outputs={})
 
     # ------------------------------------------------------------------- load
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:

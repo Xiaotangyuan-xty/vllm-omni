@@ -84,8 +84,6 @@ def test_rejects_empty_input(text):
         {"ref_audio": "data:audio/wav;base64,AAAA"},
         {"speaker_embedding": [0.0]},
         {"instructions": "happy"},
-        {"seed": 7},
-        {"extra_params": {"temperature": 0.5}},
         {"stream": True},
         {"stream_format": "audio"},
         {"response_format": "flac"},
@@ -124,3 +122,34 @@ def test_max_tokens_override_does_not_mutate_defaults_or_codec_params():
     assert result[0].max_tokens == 16
     assert result[1].max_tokens == 128
     assert params[0].max_tokens == 64
+
+
+def test_p3_adapter_accepts_request_seed_and_audio_sampling_controls():
+    request = OpenAICreateSpeechRequest(
+        input="Hello.",
+        seed=7,
+        extra_params={
+            "temperature": 0.7,
+            "top_k": 8,
+            "top_p": 0.9,
+            "min_p": 0.2,
+            "repetition_window": 3,
+            "repetition_penalty": 1.5,
+        },
+    )
+    assert _adapter().validate(request) is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"min_p": 1.1},
+        {"top_k": -2},
+        {"repetition_window": -1},
+        {"repetition_penalty": 0.5},
+        {"repetition_codebooks": 9},
+        {"emotion": 1},
+    ],
+)
+def test_p3_adapter_rejects_invalid_or_out_of_scope_sampling_fields(extra):
+    assert _adapter().validate(OpenAICreateSpeechRequest(input="Hello.", extra_params=extra)) is not None
