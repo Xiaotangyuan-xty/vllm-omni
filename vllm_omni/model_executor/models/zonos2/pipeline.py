@@ -2,8 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """ZONOS2 pipeline: Talker (text -> 9-codebook DAC tokens) -> Code2Wav (DAC 44.1kHz PCM).
 
-M1 skeleton: sync handoff only (deploy yaml sets ``async_chunk: false``).
-Streaming (async_chunk) arrives with the DAC streaming decoder in M4.
+Supports sync completion and native DAC overlap-add streaming.
 """
 
 from vllm_omni.config.stage_config import (
@@ -27,6 +26,7 @@ ZONOS2_PIPELINE = PipelineConfig(
             input_sources=(),
             owns_tokenizer=True,
             engine_output_type="latent",
+            async_chunk_process_next_stage_input_func=f"{_PROC}.talker2dac_async_chunk",
             # EOS handling is owned by the model-side sampler (any codebook
             # hitting eoa starts the n_codebooks+1 countdown); the LM token
             # stream is a lifecycle channel only.
