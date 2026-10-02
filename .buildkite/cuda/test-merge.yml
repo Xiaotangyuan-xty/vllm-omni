@@ -243,3 +243,23 @@ steps:
             export VLLM_TEST_MINIMAX_H3_LATENT_UPSCALER
             timeout 35m pytest -s -v tests/e2e/online_serving/minimax_h3/test_minimax_h3.py -m 'advanced_model and cuda and diffusion' --run-level 'advanced_model'
         mirror_hardwares: h100_2
+
+  - label: "TTS · ZONOS2 · advanced_model"
+    depends_on: upload-merge-pipeline
+    source_file_dependencies:
+      - vllm_omni/model_executor/models/zonos2/
+      - vllm_omni/model_executor/stage_input_processors/zonos2.py
+      - vllm_omni/entrypoints/openai/tts_adapters/zonos2.py
+      - vllm_omni/deploy/zonos2.yaml
+      - tests/e2e/zonos2/
+      - tests/model_executor/models/zonos2/
+      - requirements/zonos2
+    timeout_in_minutes: 60
+    mirror_hardwares: h100_1
+    env:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    commands:
+      - uv pip install --system -r requirements/zonos2.txt --overrides requirements/zonos2-overrides.txt
+      # ZONOS2_TEST_MODEL_PATH and codec/speaker assets must be provisioned locally on the agent.
+      - pytest -sv tests/e2e/zonos2 -m 'advanced_model and cuda and cards_1' --run-level advanced_model
