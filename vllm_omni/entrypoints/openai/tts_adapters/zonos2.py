@@ -2,15 +2,16 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """ZONOS2 registration and dummy-weight speech serving skeleton.
 
-The production text frontend, request-local sampler and real DAC are separate
-milestones. Until they land, only an explicitly dummy-loaded two-stage pipeline
-accepts requests here. Its fixed placeholder prompt exercises engine routing;
-it is not ZONOS2 text tokenization and the returned waveform is silent.
+The P2-01 processor constructs canonical normalized text frames. Serving still
+requires an explicitly dummy-loaded two-stage pipeline until the request-local
+sampler and real DAC milestones land; its returned waveform remains silent.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+
+from vllm.utils.async_utils import make_async
 
 from vllm_omni.entrypoints.openai.tts_adapters import register_tts_adapter
 from vllm_omni.entrypoints.openai.tts_adapters.base import ARTTSAdapter, PreparedRequest, apply_max_new_tokens
@@ -30,6 +31,17 @@ class Zonos2Adapter(ARTTSAdapter):
     model_archs = frozenset({"Zonos2ForConditionalGeneration", "Zonos2TalkerForConditionalGeneration"})
     supported_output_sample_rates = frozenset({44100})
     max_new_tokens_max = 1024
+
+    def __init__(self, ctx):
+        super().__init__(ctx)
+        self._processor = None
+
+    def _get_processor(self):
+        from vllm_omni.model_executor.models.zonos2.zonos2_processor import Zonos2Processor
+
+        if self._processor is None:
+            self._processor = Zonos2Processor(self.ctx.engine_client.model_config.hf_config)
+        return self._processor
 
     def _is_dummy_pipeline(self) -> bool:
         stages = getattr(self.ctx.engine_client, "stage_configs", ()) or ()
@@ -93,7 +105,7 @@ class Zonos2Adapter(ARTTSAdapter):
         error = self.validate(request)
         if error is not None:
             raise ValueError(error)
-        return PreparedRequest(
-            prompt={"prompt_token_ids": [0]},
-            model_type=self.name,
+        build_prompt = make_async(
+            self._get_processor().build_prompt, executor=getattr(self.ctx.server, "_tts_executor", None)
         )
+        return PreparedRequest(prompt=await build_prompt(request.input), model_type=self.name)

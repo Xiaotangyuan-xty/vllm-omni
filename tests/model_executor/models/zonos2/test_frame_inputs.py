@@ -272,3 +272,59 @@ def test_bf16_text_convenience_uses_canonical_audio_then_text_order(talker):
     # order sums the nine audio columns first, then adds the text column.
     torch.testing.assert_close(talker.embed_input_ids(frames), expected, rtol=0, atol=0)
     torch.testing.assert_close(talker.embed_input_ids(torch.tensor([1])), expected, rtol=0, atol=0)
+
+
+def test_runner_prefill_chunks_use_absolute_offsets_and_inject_speaker_once(talker):
+    frames = _frames(3)
+    frames[:, 9] = torch.tensor([1, 2, 1])
+    with torch.no_grad():
+        talker.multi_embedder.embedders[9].weight.copy_(torch.tensor([[0.0, 0.0], [3.0, 4.0], [5.0, 6.0], [0.0, 0.0]]))
+    speaker = torch.zeros(2048)
+    speaker[:2] = torch.tensor([3.0, 4.0])
+    info = {
+        "zonos2_frames": frames,
+        "zonos2_speaker_embedding": speaker,
+        "zonos2_speaker_position": 0,
+        "_omni_is_prefill": True,
+    }
+    _, first, update = talker.preprocess(torch.tensor([1]), None, _omni_num_computed_tokens=0, **info)
+    _, rest, _ = talker.preprocess(torch.tensor([2, 1]), None, _omni_num_computed_tokens=1, **info)
+    torch.testing.assert_close(first, torch.tensor([[7.0, -4.0]]))
+    torch.testing.assert_close(rest, torch.tensor([[5.0, 6.0], [3.0, 4.0]]))
+    assert update == {}
+    # The preprocessor returns raw embeddings. Only forward normalizes them.
+    talker(frames, torch.arange(3), inputs_embeds=torch.cat((first, rest)))
+    expected = torch.tensor([[7.0, -4.0]]) / math.sqrt(33.0)
+    torch.testing.assert_close(talker.layers[0].hidden[:1], expected)
+    assert torch.equal(frames[:, 9], torch.tensor([1, 2, 1]))
+
+
+def test_runner_decode_uses_all_nine_previous_codes_and_text_padding(talker):
+    frames = _frames()
+    with torch.no_grad():
+        for col, table in enumerate(talker.multi_embedder.embedders):
+            table.weight[1] = torch.tensor([col + 1.0, 0.0])
+            table.weight[3] = torch.tensor([0.0, col + 1.0])
+    info = {
+        "zonos2_frames": frames,
+        "_omni_num_computed_tokens": 1,
+        "_omni_is_prefill": False,
+        "codes": {"audio": torch.ones((1, 9), dtype=torch.int32)},
+    }
+    lifecycle = torch.tensor([2])
+    ids, embeds, updates = talker.preprocess(lifecycle, None, **info)
+    torch.testing.assert_close(embeds, torch.tensor([[45.0, 10.0]]))
+    assert torch.equal(ids, lifecycle) and updates == {}
+
+
+def test_runner_decode_requires_complete_codes_instead_of_using_lifecycle_token(talker):
+    for codes in (None, torch.ones(8, dtype=torch.int32)):
+        with pytest.raises(ValueError, match="nine"):
+            talker.preprocess(
+                torch.tensor([1]),
+                None,
+                zonos2_frames=_frames(),
+                _omni_num_computed_tokens=1,
+                _omni_is_prefill=False,
+                codes={"audio": codes},
+            )

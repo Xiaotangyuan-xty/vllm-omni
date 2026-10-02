@@ -387,6 +387,7 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
     have_multimodal_outputs: bool = True
     prefer_model_sampler: bool = True
     has_postprocess: bool = True
+    has_preprocess: bool = True
 
     _emb_norm_weight: torch.Tensor | None
 
@@ -442,6 +443,74 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
     def embed_input_ids(self, input_ids: torch.Tensor, **_: Any) -> torch.Tensor:
         return self._embed_input_ids(input_ids)
 
+    def _inject_speaker(
+        self, hidden: torch.Tensor, speaker_embeddings: torch.Tensor, speaker_positions: torch.Tensor
+    ) -> torch.Tensor:
+        if speaker_embeddings.ndim != 2 or speaker_embeddings.shape[1] != self.config.speaker_embedding_dim:
+            raise ValueError(f"speaker_embeddings must have shape [S, {self.config.speaker_embedding_dim}]")
+        if speaker_positions.ndim != 1 or speaker_positions.shape[0] != speaker_embeddings.shape[0]:
+            raise ValueError("speaker_positions must contain one input row index per speaker embedding")
+        if speaker_positions.dtype not in (torch.int32, torch.int64):
+            raise TypeError("speaker_positions must use torch.int32 or torch.int64")
+        speaker = speaker_embeddings.to(device=hidden.device, dtype=self.speaker_lda_projection.weight.dtype)
+        speaker = self.speaker_lda_projection(speaker).to(dtype=self.speaker_projection.weight.dtype)
+        speaker = self.speaker_projection(speaker).to(dtype=hidden.dtype)
+        return hidden.index_copy(0, speaker_positions.to(device=hidden.device, dtype=torch.long), speaker)
+
+    def preprocess(
+        self, input_ids: torch.Tensor, input_embeds: torch.Tensor | None, **info: Any
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+        """Map one scheduled request span to raw ten-column embeddings.
+
+        The runner supplies the absolute computed-token offset, so chunked
+        prefill needs no model-owned cursor. Decode reads the existing
+        per-request codes.audio payload; sampling/EOS logic is unchanged.
+        """
+        frames = info.get("zonos2_frames")
+        if frames is None:
+            # Retain the P1 numeric-id skeleton and direct legacy callers.
+            return input_ids, self._embed_input_ids(input_ids), {}
+        if not isinstance(frames, torch.Tensor) or frames.ndim != 2 or frames.shape[1] != 10:
+            raise ValueError("zonos2_frames must have shape [T,10]")
+        offset = int(info["_omni_num_computed_tokens"])
+        is_prefill = bool(info["_omni_is_prefill"])
+        if offset < 0:
+            raise ValueError("ZONOS2 computed-token offset must be nonnegative")
+        span = input_ids.shape[0]
+        if is_prefill:
+            selected = frames[offset : offset + span]
+            if selected.shape[0] != span:
+                raise ValueError("Scheduled prefill span exceeds zonos2_frames")
+            selected = selected.to(device=input_ids.device)
+        else:
+            if span != 1:
+                raise ValueError("ZONOS2 decode expects one frame per scheduled request")
+            codes = (info.get("codes") or {}).get("audio")
+            if not isinstance(codes, torch.Tensor) or codes.numel() != self.config.n_codebooks:
+                raise ValueError("ZONOS2 decode requires the previous nine codes.audio values")
+            if codes.dtype not in (torch.int32, torch.int64):
+                raise TypeError("ZONOS2 previous codes must use int32 or int64")
+            selected = torch.cat(
+                (
+                    codes.reshape(1, self.config.n_codebooks).to(device=input_ids.device, dtype=torch.long),
+                    torch.full((1, 1), self.config.text_vocab, device=input_ids.device, dtype=torch.long),
+                ),
+                dim=1,
+            )
+        hidden = self._embed_input_ids(selected)
+        speaker = info.get("zonos2_speaker_embedding")
+        if is_prefill and speaker is not None:
+            position = int(info.get("zonos2_speaker_position", 0))
+            if offset <= position < offset + span:
+                if not isinstance(speaker, torch.Tensor):
+                    raise TypeError("zonos2_speaker_embedding must be a tensor")
+                hidden = self._inject_speaker(
+                    hidden,
+                    speaker.reshape(1, -1),
+                    torch.tensor([position - offset], device=input_ids.device, dtype=torch.long),
+                )
+        return input_ids, hidden, {}
+
     # ----------------------------------------------------------------- forward
     def forward(
         self,
@@ -464,17 +533,8 @@ class Zonos2TalkerForConditionalGeneration(nn.Module):
         if (speaker_embeddings is None) != (speaker_positions is None):
             raise ValueError("speaker_embeddings and speaker_positions must be supplied together")
         if speaker_embeddings is not None and speaker_positions is not None:
-            if speaker_embeddings.ndim != 2 or speaker_embeddings.shape[1] != self.config.speaker_embedding_dim:
-                raise ValueError(f"speaker_embeddings must have shape [S, {self.config.speaker_embedding_dim}]")
-            if speaker_positions.ndim != 1 or speaker_positions.shape[0] != speaker_embeddings.shape[0]:
-                raise ValueError("speaker_positions must contain one input row index per speaker embedding")
-            if speaker_positions.dtype not in (torch.int32, torch.int64):
-                raise TypeError("speaker_positions must use torch.int32 or torch.int64")
-            speaker = speaker_embeddings.to(device=hidden.device, dtype=self.speaker_lda_projection.weight.dtype)
-            speaker = self.speaker_lda_projection(speaker).to(dtype=self.speaker_projection.weight.dtype)
-            speaker = self.speaker_projection(speaker).to(dtype=hidden.dtype)
             # Official semantics replace the entire slot, before emb_norm.
-            hidden = hidden.index_copy(0, speaker_positions.to(device=hidden.device, dtype=torch.long), speaker)
+            hidden = self._inject_speaker(hidden, speaker_embeddings, speaker_positions)
         # emb_norm: weight-free RMSNorm applied once at this common boundary,
         # whatever the embedding source (token ids / frame ids / inputs_embeds).
         # Callers producing inputs_embeds must NOT pre-normalize.

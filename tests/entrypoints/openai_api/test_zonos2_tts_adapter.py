@@ -98,12 +98,20 @@ def test_skeleton_rejects_features_outside_p1(kwargs):
     assert _adapter().validate(OpenAICreateSpeechRequest(input="Hello.", **kwargs)) is not None
 
 
-def test_build_exercises_the_existing_placeholder_path_without_tokenizer():
+def test_build_uses_the_p2_processor_without_a_hf_tokenizer():
     adapter = _adapter()
+    calls = []
+
+    def build_prompt(text):
+        calls.append(text)
+        return {"prompt_token_ids": [519, 2, 3], "additional_information": {"zonos2_frames": "sentinel"}}
+
+    adapter._processor = SimpleNamespace(build_prompt=build_prompt)
     request = OpenAICreateSpeechRequest(input="中文 dummy.", max_new_tokens=16)
     prepared = asyncio.run(adapter.build(request, [], False))
+    assert calls == ["中文 dummy."]
     assert prepared.model_type == "zonos2"
-    assert prepared.prompt == {"prompt_token_ids": [0]}
+    assert prepared.prompt["additional_information"]["zonos2_frames"] == "sentinel"
     assert prepared.tts_params == {}
     assert request.input == "中文 dummy."
 
