@@ -33,7 +33,7 @@ HTTP requests embed the reference as a data URI.
 CUDA_VISIBLE_DEVICES='' pytest tests/model_executor/models/zonos2/test_acceptance_checks.py -m cpu
 
 # GPU core: tiny real DAC, boundaries, OLA, duplicates and cleanup; no model download.
-pytest tests/model_executor/models/zonos2/test_codec_gpu.py -m 'core_model and cuda and cards_1'
+pytest tests/model_executor/models/zonos2 -m 'core_model and cuda and cards_1'
 
 # Advanced: real offline request and HTTP WAV/raw-PCM/SSE with reference audio.
 pytest tests/e2e/zonos2 -m 'advanced_model and cuda and cards_1' --run-level advanced_model

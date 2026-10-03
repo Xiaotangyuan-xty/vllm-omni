@@ -101,3 +101,33 @@ The DAC dependency's TorchScript Snake activation can change numerically
 after its first profiling call. Exact reference comparisons warm both
 implementations first. Conditioning helpers derive from the frozen MIT
 ZONOS2 source at `194c0a3a`; the original notice is in `LICENSE.zonos2`.
+
+## Optional single-row router replay
+
+`VLLM_ZONOS2_ROUTER_REPLAY=1` opts into CUDA replay of the Sonic EDA router
+for contiguous BF16 single-row inference. It is disabled by default. Only
+the router linear/activation/norm/softmax operations are captured; attention,
+KV metadata, sampling, RNG, EOS and request state stay on the existing path.
+The full AR graph guard still requires `enforce_eager: true`, synchronous
+AR scheduling and no prefix cache. Batched/prefill/CPU/training shapes use
+the existing implementation. Capture failures propagate. Each router owns
+its static inputs/outputs and invalidates captures on device/dtype moves.
+Consumers must finish using replay outputs before the next invocation.
+
+```bash
+export VLLM_ZONOS2_ROUTER_REPLAY=1
+# Then use the existing serve/API/benchmark commands with an idle single GPU.
+pytest -sv tests/model_executor/models/zonos2/test_router_replay_gpu.py
+```
+
+## C4 numerical sensitivity
+
+The fixed seed42 Chinese `zh_01` cap failure is reproducible on A40 with
+128-token chunked prefill. Single-request and C4 histories match through
+the first ten frames, then BF16 batched numerical differences change one
+codebook draw. Saved-logit replay reproduces that draw; the hidden row map
+is intact. The resulting trajectory can remain silent without EOA.
+Larger prefill can avoid this cap but did not pass the per-sample CER gate.
+Keep the B1 recommendation; do not hide failures by changing the frozen
+sampling defaults or by treating cap removal as speech-quality qualification.
+Default precision settings and the explicit incomplete-generation error remain.

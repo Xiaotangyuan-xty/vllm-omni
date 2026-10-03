@@ -22,8 +22,10 @@ Numerical backbone scope:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any
+import os
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 import torch
 import torch.nn.functional as F
@@ -228,12 +230,26 @@ class Zonos2DenseFFN(nn.Module):
         return F.linear(h * F.silu(gate), self.w_out.weight)
 
 
+class _GraphReplay(Protocol):
+    def replay(self) -> None: ...
+
+
+@dataclass
+class _RouterCapture:
+    input: torch.Tensor
+    previous: torch.Tensor | None
+    graph: _GraphReplay
+    output: tuple[torch.Tensor, torch.Tensor]
+
+
 class Zonos2SonicRouter(nn.Module):
     """Sonic EDA router: down_proj -> EDA state mix -> RMSNorm -> 3-layer GeLU
     MLP, with aux-loss-free balancing bias on the top-k selection."""
 
     def __init__(self, config: Zonos2Config, has_prev_state: bool):
         super().__init__()
+        self._replay_enabled = os.environ.get("VLLM_ZONOS2_ROUTER_REPLAY", "0") == "1"
+        self._captures: dict[bool, _RouterCapture] = {}
         rd = config.moe_router_dim
         self.down_proj = nn.Linear(config.dim, rd, bias=True)
         # RMSNorm over router_dim (checkpoint key ``rmsnorm_eda.weight``).
@@ -252,7 +268,71 @@ class Zonos2SonicRouter(nn.Module):
             # Layers 4..26 mix in the previous MoE layer's router state.
             self.router_states_scale = nn.Parameter(torch.zeros(rd))
 
+    def _apply(self, fn: Callable[[torch.Tensor], torch.Tensor], recurse: bool = True) -> Zonos2SonicRouter:
+        # Captures hold parameter addresses; a device/dtype move invalidates them.
+        self._captures.clear()
+        super()._apply(fn, recurse=recurse)
+        return self
+
     def forward(self, x: torch.Tensor, prev_router_state: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
+        if not self._replay_enabled:
+            return self._forward_eager(x, prev_router_state)
+        previous_matches = prev_router_state is None or (
+            prev_router_state.shape == (1, self.down_proj.out_features)
+            and prev_router_state.dtype == x.dtype
+            and prev_router_state.device == x.device
+            and prev_router_state.is_contiguous()
+        )
+        # Only the qualified contiguous BF16 single-row inference profile uses
+        # replay. Prefill/batched/training/CPU paths retain the existing kernels.
+        qualified = (
+            self._replay_enabled
+            and not self.training
+            and not torch.is_grad_enabled()
+            and x.is_cuda
+            and x.dtype == torch.bfloat16
+            and x.ndim == 2
+            and x.shape == (1, self.down_proj.in_features)
+            and x.is_contiguous()
+            and previous_matches
+        )
+        if not qualified:
+            return self._forward_eager(x, prev_router_state)
+        key = prev_router_state is not None
+        capture = self._captures.get(key)
+        if capture is None:
+            capture = self._capture(x, prev_router_state)
+            self._captures[key] = capture
+        # Private static storage is required by CUDA replay. Returned tensors
+        # are consumed within this forward, before the next invocation.
+        capture.input.copy_(x)
+        if capture.previous is not None and prev_router_state is not None:
+            capture.previous.copy_(prev_router_state)
+        capture.graph.replay()
+        return capture.output
+
+    def _capture(self, x: torch.Tensor, previous: torch.Tensor | None) -> _RouterCapture:
+        cuda = torch.get_device_module("cuda")
+        static_x = torch.empty_like(x)
+        static_previous = torch.empty_like(previous) if previous is not None else None
+        static_x.copy_(x)
+        if static_previous is not None and previous is not None:
+            static_previous.copy_(previous)
+        stream = cuda.Stream(device=x.device)
+        stream.wait_stream(cuda.current_stream(x.device))
+        with cuda.stream(stream):
+            for _ in range(3):
+                self._forward_eager(static_x, static_previous)
+        cuda.current_stream(x.device).wait_stream(stream)
+        graph = cuda.CUDAGraph()
+        # Capture errors propagate; this never pretends a failed candidate ran.
+        with cuda.graph(graph, stream=stream):
+            output = self._forward_eager(static_x, static_previous)
+        return _RouterCapture(static_x, static_previous, graph, output)
+
+    def _forward_eager(
+        self, x: torch.Tensor, prev_router_state: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Returns (expert_prob, next_router_state).
 
         Official order: down_proj -> EDA blend (scale * prev_state) -> keep the

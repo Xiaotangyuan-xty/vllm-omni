@@ -144,3 +144,35 @@ the explicit budget error protect recommended serving behavior. DAC compile
 failed the numerical gate; DAC graph passed only a component experiment.
 Full AR graph remains disabled. Reproduce measurements with
 [benchmarks/zonos2](../../benchmarks/zonos2/README.md).
+
+## Optional router replay and CI preparation
+
+Set `VLLM_ZONOS2_ROUTER_REPLAY=1` before the existing serve/benchmark
+command to opt into the qualified BF16 single-row router component.
+`enforce_eager` stays true; this does not capture full AR execution or
+request state. Default is off. See the [model contract](../../vllm_omni/model_executor/models/zonos2/README.md#optional-single-row-router-replay).
+
+Real-weight CI explicitly prepares pinned assets before offline testing:
+
+```bash
+python tools/prepare_zonos2_ci.py --asset-root /owned/zonos2-ci --env-file /owned/zonos2-ci/asset.env
+. /owned/zonos2-ci/asset.env
+```
+
+An owned reusable cache/preprovisioned paths are supported. Fresh original
+plus converted weights need approximately 35GB and additional result space.
+Buildkite requires an authorized trigger or the repository CI labels;
+local A40 runs do not establish a hosted H100/B200 pass.
+
+Router replay A/B on one A40 GPU1 used the same ten frozen inputs, two
+warmups and three measured rounds per variant (30 requests each).
+E2E P50: 15.584s eager / 13.731s replay; RTF P50: 3.710 / 3.324;
+first PCM P50: 1.027s / .933s. Sampled peak: 28817 / 29369MiB.
+All 30 paired code histories and waveforms were bit-identical. Round-zero
+quality was identical: EN WER 2.74%, ZH CER 0, native cosine .97265,
+UTMOS 3.3647, no failed samples. These small-corpus A40 results do not
+qualify other hardware or realtime performance. Default replay remains off.
+
+The warmed 32-forward trace retained 40685 GPU kernels, while CPU
+`cudaLaunchKernel` calls fell from 35347 to 25737 with 744 graph launches.
+Replay reduces host dispatch; it does not replace attention or sampling.
