@@ -548,20 +548,18 @@ steps:
 
   - label: "TTS · ZONOS2 · full_model"
     depends_on: upload-nightly-pipeline
-    source_file_dependencies:
-      - vllm_omni/model_executor/models/zonos2/
-      - vllm_omni/model_executor/stage_input_processors/zonos2.py
-      - vllm_omni/entrypoints/openai/tts_adapters/zonos2.py
-      - vllm_omni/deploy/zonos2.yaml
-      - tests/e2e/zonos2/
-      - tests/model_executor/models/zonos2/
-      - requirements/zonos2
+    source_file_dependencies: zonos2_function
     timeout_in_minutes: 60
-    mirror_hardwares: h100_1
     env:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     commands:
       - uv pip install --system -r requirements/zonos2.txt --overrides requirements/zonos2-overrides.txt
-      # ZONOS2_TEST_MODEL_PATH and codec/speaker assets must be provisioned locally on the agent.
-      - pytest -sv tests/e2e/zonos2 -m 'full_model and cuda and cards_1' --run-level full_model
+      # Explicit preparation may download pinned assets; the test stays offline.
+      # An owned cache and preprovisioned paths can be supplied by the agent.
+      - |
+        set -eu
+        ASSET_ROOT="$${ZONOS2_CI_ASSET_ROOT:-$$(mktemp -d -t zonos2-ci-XXXXXX)}"
+        python tools/prepare_zonos2_ci.py --asset-root "$$ASSET_ROOT" --env-file "$$ASSET_ROOT/asset.env"
+        . "$$ASSET_ROOT/asset.env"
+        pytest -sv tests/e2e/zonos2 -m 'full_model and cuda and (H100 or B200) and cards_1' --run-level full_model

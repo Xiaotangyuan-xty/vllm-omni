@@ -46,8 +46,18 @@ GPU marks are attached with `hardware_test`. The core job targets L4/B200;
 real-weight jobs target H100/B200 with one card. They can also be run manually
 on a sufficiently large CUDA card with the same one-card visibility setting.
 The dedicated core job installs codec extras; broader GPU suites skip that
-optional test when DAC is absent. Real-weight jobs require preloaded model
-assets on the CI agent. Ready, merge and nightly pipelines add only ZONOS2
+optional test when DAC is absent. Real-weight jobs explicitly prepare the pinned original model, conversion,
+DAC and speaker assets with `tools/prepare_zonos2_ci.py` before starting
+offline tests. Source and tensor hashes are verified. Agents may set an
+owned `ZONOS2_CI_ASSET_ROOT` and the three existing asset-path variables to
+reuse verified local assets. A fresh preparation needs approximately 35GB
+for the original and converted model, plus room for retained test evidence.
+The preparation step may use the network; inference stays offline.
+
+Buildkite GPU jobs require the repository's `ready` (core), `merge-test`
+(advanced), or `nightly-test` (full) labels/authorized build trigger.
+Changing a Draft PR to ready for review does not substitute for a CI label.
+Contributors without label permissions need a maintainer to trigger it. Ready, merge and nightly pipelines add only ZONOS2
 jobs, selected through model-specific source dependencies.
 
 ## Assertions and evidence
@@ -87,3 +97,12 @@ Subprocess cleanup signals only the process group created by that test.
 
 These tests do not measure WER/CER, speaker similarity, UTMOS or performance;
 those remain P6 work.
+
+## Asset preparation
+
+```bash
+python tools/prepare_zonos2_ci.py --asset-root /owned/zonos2-ci --env-file /owned/zonos2-ci/asset.env
+. /owned/zonos2-ci/asset.env
+# To verify preprovisioned paths without any download:
+python tools/prepare_zonos2_ci.py --offline --asset-root /owned/zonos2-ci --env-file /owned/zonos2-ci/asset.env
+```
