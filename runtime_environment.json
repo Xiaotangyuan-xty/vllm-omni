@@ -1,0 +1,20 @@
+{
+  "python": "3.12.13",
+  "vllm_module": "/workspace/venv-mrv2-20261119/lib/python3.12/site-packages/vllm/__init__.py",
+  "omni_module": "/workspace/vllm-omni/vllm_omni/__init__.py",
+  "packages": {
+    "vllm": "0.34.0",
+    "torch": "2.14.0",
+    "flashinfer-python": "0.7.3",
+    "transformers": "5.22.0",
+    "numpy": "2.3.5",
+    "pytest": "9.1.1",
+    "pytest-xdist": "3.8.0",
+    "ray": null,
+    "torchmetrics": null,
+    "opentelemetry-instrumentation-fastapi": null,
+    "mistune": null,
+    "hyperpyyaml": null,
+    "openpyxl": null
+  }
+}

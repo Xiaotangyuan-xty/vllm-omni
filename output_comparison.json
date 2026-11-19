@@ -1,0 +1,32 @@
+{
+  "base_sha": "2c0bd4ee57b339d97305663bb5baf5740a7232d3",
+  "head_sha": "f43b420323bcfcbe89c3a49fa9a0e3303063a33c",
+  "cases": {
+    "sync": {
+      "directory": "/workspace/parity_artifacts/sync_handoff_fix_20261119/e2e-results/offline-28780580",
+      "code_shape": [
+        357,
+        9
+      ],
+      "v1_codes_equal": true,
+      "waveform_shape": [
+        177664
+      ],
+      "independent_dac_max_error": 0.0
+    },
+    "chunked": {
+      "directory": "/workspace/parity_artifacts/sync_handoff_fix_20261119/e2e-results/offline-d791c83e",
+      "code_shape": [
+        357,
+        9
+      ],
+      "v1_codes_equal": true,
+      "waveform_shape": [
+        177664
+      ],
+      "independent_dac_max_error": null,
+      "v1_waveform_equal": true,
+      "v1_waveform_max_abs_error": 0.0
+    }
+  }
+}

@@ -1,0 +1,1341 @@
+{
+  "head": "f43b420323bcfcbe89c3a49fa9a0e3303063a33c",
+  "pipelines_sha256": {
+    ".buildkite/cuda/test-merge.yml": "8b385dc3ba51d0f145324d1748b2fc0753d9b1e742fc2e14ecc8fa3ddd3ede58",
+    ".buildkite/cuda/test-nightly.yml": "dc73f603c914f060bf46a6816c85e4b0d721ad11df1582b2a85454d82da19016",
+    ".buildkite/cuda/test-ready.yml": "412c218af56cf8c3d5d67b250cfda0776b2c0225c9d988d83c639684f8cdb483",
+    ".buildkite/cuda/test-weekly.yml": "12abc25eb7a970838e17cfa3411174d466fbc4b8d025948b5f76f0067b5db5f9",
+    ".buildkite/amd/test-amd-merge.yml": "cde7bae5b366bf099c497dbf0ae4f62da505cdaeb06673e8535a4c1978883010",
+    ".buildkite/amd/test-amd-nightly.yml": "496f49d32a76f1e3708dda21d32867e2d57fee42112aea1fda021ad202f30238",
+    ".buildkite/amd/test-amd-ready.yml": "6e6468caca42faf99d760445f5f96403b7bce19b6c1823d59e91d7dcd636a3c6",
+    ".buildkite/amd/test-amd-weekly.yml": "cfe7205a1a8346c98433f10eff8da0b52aef8cc673da97010145ee9a9b555e7c",
+    ".buildkite/npu/test-npu-nightly.yml": "e8e033cc56c1ff3e3121412b0885db8aba3e878369708192761fe48d1a461fdc",
+    ".buildkite/npu/test-npu-ready.yml": "7b800840d91eafa720175cb1fc99710bc95675583e0f5cd814f9bee45eec2fd9"
+  },
+  "jobs": [
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-merge.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 AR Paged Attention GPU Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_OMNI_AR_FA_REQUIRED=1",
+        "pytest -sv tests/diffusion/ar_diffusion/test_paged_attention.py -m 'core_model and cuda and L4 and cards_1' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-nightly.yml",
+      "group": [
+        ":card_index_dividers: Tiny Model Tests [Multi-GPU]"
+      ],
+      "label": ":full_moon: Tiny Model Tests \u00b7 Diffusion (Multi-GPU accelerations) \u00b7 2-GPU",
+      "hardware": null,
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv tests/model_tests/diffusion -m 'full_model and L4 and B200 and cuda and cards_2' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-nightly.yml",
+      "group": [
+        ":card_index_dividers: Tiny Model Tests [Multi-GPU]"
+      ],
+      "label": ":full_moon: Tiny Model Tests \u00b7 Diffusion (Multi-GPU accelerations) \u00b7 4-GPU",
+      "hardware": null,
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv tests/model_tests/diffusion -m 'full_model and L4 and B200 and cuda and cards_4' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-nightly.yml",
+      "group": [],
+      "label": "Simple \u00b7 CPU Coverage Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "set +e\nREPORT=\"coverage-core-model-cpu-$${BUILDKITE_STEP_ID:-local}.xml\"\npytest -sv tests/ -m 'core_model and cpu' -n 4 --dist loadgroup --cov=vllm_omni --cov-report=term-missing:skip-covered --cov-report=xml:$${REPORT}\nEXIT=$$?\ngzip -9 -f \"$${REPORT}\"\nexit $$EXIT\n"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": true,
+      "commands": [
+        "pytest -sv tests/ -m 'core_model and cpu'"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 FlashAttention Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "uv pip install --system --no-deps 'fastvideo-kernel==0.3.4'",
+        "python3 -c 'from fastvideo_kernel.block_sparse_attn import block_sparse_attn_triton'",
+        "pytest -s -v tests/diffusion/attention/ tests/diffusion/utils/test_chunked_transfer.py -m 'core_model and cuda and L4 and cards_1' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Offloader Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": true,
+      "commands": [
+        "pytest -s -v tests/diffusion/offloader -m \"core_model and cuda\" --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Cache Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv tests/diffusion/cache -m 'core_model and cuda' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Batch Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv tests/diffusion/batching -m 'core_model and cuda' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Distributed Test \u00b7 Single-GPU",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": true,
+      "commands": [
+        "pytest -sv tests/diffusion/distributed -m 'core_model and cuda and L4 and cards_1' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Distributed Test \u00b7 2-GPU",
+      "hardware": "l4_2",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv tests/diffusion/distributed -m 'core_model and cuda and L4 and cards_2' --run-level \"core_model\"",
+        "pytest -sv tests/diffusion/attention/test_ulysses_uaa.py -m 'core_model and cuda and L4 and cards_2' --run-level \"core_model\"",
+        "pytest -sv tests/diffusion/attention/test_attention_sp.py -m 'core_model and cuda and L4 and cards_2' --run-level \"core_model\"",
+        "pytest -sv tests/diffusion/ar_diffusion/test_noisy_kv_transport_cuda.py -m 'core_model and cuda and L4 and cards_2' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Distributed & Attention Test \u00b7 4-GPU",
+      "hardware": "l4_4",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv tests/diffusion/distributed -m 'core_model and cuda and L4 and cards_4' --run-level \"core_model\"",
+        "pytest -sv tests/diffusion/attention/test_attention_sp.py -m 'core_model and cuda and L4 and cards_4' --run-level \"core_model\"",
+        "pytest -sv tests/diffusion/attention/test_ulysses_uaa.py -m 'core_model and cuda and L4 and cards_4' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Model Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": true,
+      "commands": [
+        "pytest -sv tests/diffusion/models/ -m 'core_model and cuda' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Other Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv tests/diffusion/*.py tests/diffusion/ar_diffusion tests/diffusion/layers/test_adalayernorm_*.py -m 'core_model and cuda' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Tiny Model Tests [Single GPU]"
+      ],
+      "label": "Tiny Model Tests \u00b7 Diffusion (base)",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv -n 4 tests/model_tests/diffusion -m 'core_model and cuda' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Engine&Model Executor&Work Test"
+      ],
+      "label": "Engine&Model Executor&Work Test \u00b7 L4",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": true,
+      "commands": [
+        "pytest -sv tests/engine/ tests/model_executor/ tests/worker_v2/ tests/worker/ -m 'core_model and cuda and L4' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Engine&Model Executor&Work Test"
+      ],
+      "label": "Engine&Model Executor&Work Test \u00b7 H100",
+      "hardware": "h100_1",
+      "parallelism": null,
+      "automatic_shard": true,
+      "commands": [
+        "pytest -sv tests/engine/ tests/model_executor/ tests/worker_v2/ tests/worker/ -m 'core_model and cuda and H100' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Distributed Test"
+      ],
+      "label": "Distributed Test \u00b7 1GPU",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": true,
+      "commands": [
+        "pytest -sv tests/distributed/ -m 'core_model and cuda and L4 and not cards_2' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: Distributed Test"
+      ],
+      "label": "Distributed Test \u00b7 2GPU",
+      "hardware": "l4_2",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -sv tests/distributed/ -m 'core_model and cuda and L4 and cards_2' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [],
+      "label": "Entrypoints Test",
+      "hardware": "l4_1",
+      "parallelism": null,
+      "automatic_shard": true,
+      "commands": [
+        "export VLLM_WORKER_MULTIPROC_METHOD=spawn",
+        "if [ \"$${BUILDKITE_PARALLEL_JOB:-0}\" = \"0\" ]; then\n  pytest -sv tests/entrypoints/test_async_omni.py::test_diffusion_generate_request_id -m 'core_model and cuda' --run-level 'core_model'\nfi\n",
+        "pytest -sv tests/entrypoints/ -m 'core_model and cuda' --run-level 'core_model' --deselect tests/entrypoints/test_async_omni.py::test_diffusion_generate_request_id"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [
+        ":card_index_dividers: E2E Test"
+      ],
+      "label": "Omni \u00b7 MiniCPM-o 4.5 Perf Test",
+      "hardware": "h100_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export BENCHMARK_DIR=tests/dfx/perf/results",
+        "pytest -s -v tests/dfx/perf/scripts/run_benchmark.py --assert-baseline --test-config-file tests/dfx/perf/tests/test_minicpmo_4_5_ready.json -m 'core_model and cuda'"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "cuda",
+      "pipeline": ".buildkite/cuda/test-ready.yml",
+      "group": [],
+      "label": "TTS \u00b7 ZONOS2 \u00b7 core_model",
+      "hardware": null,
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "uv pip install --system -r requirements/zonos2.txt --overrides requirements/zonos2-overrides.txt",
+        "pytest -sv tests/model_executor/models/zonos2/test_codec.py -m 'core_model and cpu' --run-level core_model",
+        "pytest -sv tests/model_executor/models/zonos2 -m 'core_model and cuda and (L4 or B200) and cards_1' --run-level core_model"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Model Executor Test \u00b7 Shard %N/%t",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": 5,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 NUMEXPR_NUM_THREADS=4",
+        "python -u .buildkite/amd/scripts/run_cpu_suite.py --timing-profile=.buildkite/amd/cpu-timings/model-executor-v1.json model-executor -sv tests/model_executor -m 'core_model and cpu and not omni' --deselect=tests/model_executor/models/personaplex/test_temporal_streaming_hoist.py::test_mimi_streaming_step_matches_legacy_end_to_end"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Omni Processor Snapshot Smoke",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "timeout --signal=TERM --kill-after=1m 8m pytest -sv tests/model_executor/models/test_omni_processing.py::test_rocm_processor_snapshot_smoke -m 'core_model and cpu and omni' --durations=0"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Diffusion Test \u00b7 Shard %N/%t",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": 5,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2",
+        "python -u .buildkite/amd/scripts/run_cpu_suite.py --timing-profile=.buildkite/amd/cpu-timings/diffusion-v1.json diffusion -sv tests/diffusion -m 'core_model and cpu and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)' --ignore=tests/diffusion/cache/test_teacache_extractors.py --ignore=tests/diffusion/models/pi05/test_pi05_units.py --deselect='tests/diffusion/distributed/test_wan_vae_fastpath_install.py::test_omni_wan_vae_decode_override_is_bitwise_exact[dtype0]' --deselect='tests/diffusion/distributed/test_wan_vae_fastpath_install.py::test_omni_wan_vae_decode_override_is_bitwise_exact[dtype1]' --deselect='tests/diffusion/distributed/test_wan_decoder_fast_path.py::test_sharded_fast_path_on_every_rank[True-exact]' --deselect='tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_continues_real_causal_vae_beyond_initial_horizon[realtime]' --deselect='tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_continues_real_causal_vae_beyond_initial_horizon[stepwise]' --deselect='tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_encoder_stops_at_its_fixed_point_and_restarts_with_the_session'"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Diffusion Slow CPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2",
+        "python -u .buildkite/amd/scripts/run_cpu_suite.py diffusion -sv 'tests/diffusion/distributed/test_wan_vae_fastpath_install.py::test_omni_wan_vae_decode_override_is_bitwise_exact[dtype0]' 'tests/diffusion/distributed/test_wan_vae_fastpath_install.py::test_omni_wan_vae_decode_override_is_bitwise_exact[dtype1]' 'tests/diffusion/distributed/test_wan_decoder_fast_path.py::test_sharded_fast_path_on_every_rank[True-exact]' 'tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_continues_real_causal_vae_beyond_initial_horizon[realtime]' 'tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_continues_real_causal_vae_beyond_initial_horizon[stepwise]' 'tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_encoder_stops_at_its_fixed_point_and_restarts_with_the_session' -m 'core_model and cpu and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)'"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Diffusion \u00b7 AuK VAE GPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "timeout --signal=TERM --kill-after=2m 35m pytest -sv tests/diffusion/models/auk/test_auk_vae_fastpath.py -m 'core_model and rocm and cards_1' --run-level core_model"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Engine&Entrypoints Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "pytest -sv tests/entrypoints tests/engine -m 'core_model and cpu'"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Other Test \u00b7 Shard %N/%t",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": 2,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "python -u .buildkite/amd/scripts/run_cpu_suite.py --timing-profile=.buildkite/amd/cpu-timings/other-v1.json other -sv tests/ -m 'core_model and cpu' --ignore=tests/diffusion --ignore=tests/model_executor --ignore=tests/entrypoints --ignore=tests/engine --ignore=tests/diffusion/cache/test_teacache_extractors.py"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "ROCm \u00b7 AR Diffusion Paged Attention GPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=1",
+        "export VLLM_OMNI_AR_FA_REQUIRED=1",
+        "export AITER_JIT_DIR=\"/tmp/vllm-omni-ar-aiter-$$BUILDKITE_JOB_ID\"",
+        "export TORCH_EXTENSIONS_DIR=\"/tmp/vllm-omni-ar-torch-extensions-$$BUILDKITE_JOB_ID\"",
+        "mkdir -p \"$$AITER_JIT_DIR\" \"$$TORCH_EXTENSIONS_DIR\"",
+        "timeout --signal=TERM --kill-after=2m 15m pytest -sv tests/diffusion/ar_diffusion/test_paged_attention.py -m 'core_model and rocm and MI325 and cards_1' --run-level core_model",
+        "timeout --signal=TERM --kill-after=1m 5m pytest -sv tests/diffusion/utils/test_chunked_transfer.py -m 'core_model and rocm and MI325 and cards_1' --run-level core_model"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "ROCm \u00b7 Ulysses UAA Attention \u00b7 4-GPU",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_WORKER_MULTIPROC_METHOD=spawn",
+        "timeout --signal=TERM --kill-after=2m 20m pytest -s -v tests/diffusion/attention/test_ulysses_uaa.py tests/diffusion/attention/test_attention_sp.py -m 'core_model and rocm and MI325 and cards_4' --run-level \"core_model\" --durations=20"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-merge.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion Tensor Parallelism Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -s -v tests/diffusion/distributed/test_tensor_parallel.py",
+        "timeout 20m pytest -s -v tests/diffusion/attention/test_ulysses_uaa.py::test_ulysses_uaa_2d_mask_layout_matches_baseline -m 'core_model and cards_2' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-nightly.yml",
+      "group": [
+        ":robot_face: Pi0.5 CPU Nightly"
+      ],
+      "label": "Simple \u00b7 Pi0.5 CPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export PI05_CPU_ARTIFACT_DIR=\"$${BUILDKITE_BUILD_CHECKOUT_PATH:?}/artifacts/pi05-cpu\"",
+        "mkdir -p \"$$PI05_CPU_ARTIFACT_DIR\"",
+        "export VLLM_ROCM_USE_AITER=0",
+        "pytest -sv tests/diffusion/models/pi05/test_pi05_units.py -m 'core_model and cpu' --junitxml=\"$$PI05_CPU_ARTIFACT_DIR/pytest.xml\"\npython -c 'import sys, xml.etree.ElementTree as ET\nroot = ET.parse(sys.argv[1]).getroot()\nif root.tag not in {\"testsuite\", \"testsuites\"}:\n    raise SystemExit(\"Unexpected JUnit root\")\nsuites = [root] if root.tag == \"testsuite\" else list(root.findall(\"testsuite\"))\ntests = sum(int(suite.attrib.get(\"tests\", \"0\")) for suite in suites)\nskipped = sum(int(suite.attrib.get(\"skipped\", \"0\")) for suite in suites)\nfailures = sum(int(suite.attrib.get(\"failures\", \"0\")) for suite in suites)\nerrors = sum(int(suite.attrib.get(\"errors\", \"0\")) for suite in suites)\nif tests != 103 or skipped != 0 or failures != 0 or errors != 0:\n    print(\"Expected exactly 103 executed Pi0.5 CPU tests; \"\n          f\"tests={tests}, skipped={skipped}, failures={failures}, errors={errors}\", file=sys.stderr)\n    raise SystemExit(5)\n' \"$$PI05_CPU_ARTIFACT_DIR/pytest.xml\"\n"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-nightly.yml",
+      "group": [
+        ":microscope: Tiny Diffusion Multi-GPU MI300 Nightly"
+      ],
+      "label": "ROCm \u00b7 Tiny Diffusion Multi-GPU \u00b7 4-GPU",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export ROCM_TINY_DIFFUSION_4GPU_ARTIFACT_DIR=\"$${BUILDKITE_BUILD_CHECKOUT_PATH:?}/artifacts/rocm-tiny-diffusion-4gpu\"",
+        "mkdir -p \"$$ROCM_TINY_DIFFUSION_4GPU_ARTIFACT_DIR\"",
+        "bash .buildkite/amd/scripts/assert-pytest-collection.sh 11 \\\n  tests/model_tests/diffusion/test_common_offline.py \\\n  -m \"full_model and diffusion and rocm and MI325 and cards_4 and not nvidia_only\" \\\n  --run-level core_model \\\n  | tee \"$$ROCM_TINY_DIFFUSION_4GPU_ARTIFACT_DIR/collection.txt\"\n",
+        "set +e\ntimeout --signal=TERM --kill-after=2m 40m \\\n  pytest -s -v -ra tests/model_tests/diffusion/test_common_offline.py \\\n  -m \"full_model and diffusion and rocm and MI325 and cards_4 and not nvidia_only\" \\\n  --run-level core_model --durations=20 \\\n  --junitxml=\"$$ROCM_TINY_DIFFUSION_4GPU_ARTIFACT_DIR/pytest.xml\" \\\n  2>&1 | tee \"$$ROCM_TINY_DIFFUSION_4GPU_ARTIFACT_DIR/pytest.log\"\nstatus=$${PIPESTATUS[0]}\nset -e\ntail -n 100 \"$$ROCM_TINY_DIFFUSION_4GPU_ARTIFACT_DIR/pytest.log\" > \\\n  \"$$ROCM_TINY_DIFFUSION_4GPU_ARTIFACT_DIR/pytest-summary.txt\"\nexit \"$$status\"\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Model Executor Test \u00b7 Shard %N/%t",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": 5,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 NUMEXPR_NUM_THREADS=4",
+        "python -u .buildkite/amd/scripts/run_cpu_suite.py --timing-profile=.buildkite/amd/cpu-timings/model-executor-v1.json model-executor -sv tests/model_executor -m 'core_model and cpu and not omni' --deselect=tests/model_executor/models/personaplex/test_temporal_streaming_hoist.py::test_mimi_streaming_step_matches_legacy_end_to_end"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Omni Processor Snapshot Smoke",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "timeout --signal=TERM --kill-after=1m 8m pytest -sv tests/model_executor/models/test_omni_processing.py::test_rocm_processor_snapshot_smoke -m 'core_model and cpu and omni' --durations=0"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Diffusion Test \u00b7 Shard %N/%t",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": 5,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2",
+        "python -u .buildkite/amd/scripts/run_cpu_suite.py --timing-profile=.buildkite/amd/cpu-timings/diffusion-v1.json diffusion -sv tests/diffusion -m 'core_model and cpu and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)' --ignore=tests/diffusion/cache/test_teacache_extractors.py --ignore=tests/diffusion/models/pi05/test_pi05_units.py --deselect='tests/diffusion/distributed/test_wan_vae_fastpath_install.py::test_omni_wan_vae_decode_override_is_bitwise_exact[dtype0]' --deselect='tests/diffusion/distributed/test_wan_vae_fastpath_install.py::test_omni_wan_vae_decode_override_is_bitwise_exact[dtype1]' --deselect='tests/diffusion/distributed/test_wan_decoder_fast_path.py::test_sharded_fast_path_on_every_rank[True-exact]' --deselect='tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_continues_real_causal_vae_beyond_initial_horizon[realtime]' --deselect='tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_continues_real_causal_vae_beyond_initial_horizon[stepwise]' --deselect='tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_encoder_stops_at_its_fixed_point_and_restarts_with_the_session'"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Diffusion Slow CPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2",
+        "python -u .buildkite/amd/scripts/run_cpu_suite.py diffusion -sv 'tests/diffusion/distributed/test_wan_vae_fastpath_install.py::test_omni_wan_vae_decode_override_is_bitwise_exact[dtype0]' 'tests/diffusion/distributed/test_wan_vae_fastpath_install.py::test_omni_wan_vae_decode_override_is_bitwise_exact[dtype1]' 'tests/diffusion/distributed/test_wan_decoder_fast_path.py::test_sharded_fast_path_on_every_rank[True-exact]' 'tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_continues_real_causal_vae_beyond_initial_horizon[realtime]' 'tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_continues_real_causal_vae_beyond_initial_horizon[stepwise]' 'tests/diffusion/models/lingbot_world/test_pipeline_lingbot_world.py::test_condition_encoder_stops_at_its_fixed_point_and_restarts_with_the_session' -m 'core_model and cpu and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)'"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Diffusion \u00b7 AuK VAE GPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "timeout --signal=TERM --kill-after=2m 35m pytest -sv tests/diffusion/models/auk/test_auk_vae_fastpath.py -m 'core_model and rocm and cards_1' --run-level core_model"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Engine&Entrypoints Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "pytest -sv tests/entrypoints tests/engine -m 'core_model and cpu'"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Simple \u00b7 Other Test \u00b7 Shard %N/%t",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": 2,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=0",
+        "python -u .buildkite/amd/scripts/run_cpu_suite.py --timing-profile=.buildkite/amd/cpu-timings/other-v1.json other -sv tests/ -m 'core_model and cpu' --ignore=tests/diffusion --ignore=tests/model_executor --ignore=tests/entrypoints --ignore=tests/engine --ignore=tests/diffusion/cache/test_teacache_extractors.py"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [],
+      "label": "Voxtral TTS CUDA Unit Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "timeout 10m pytest -s -v tests/model_executor/models/voxtral_tts/test_cuda_graph_acoustic_transformer.py"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "ROCm \u00b7 FlashAttention/AITER GPU Coverage",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=1",
+        "export TORCH_EXTENSIONS_DIR=\"/tmp/vllm-omni-torch-extensions-$$BUILDKITE_JOB_ID\"",
+        "mkdir -p \"$$TORCH_EXTENSIONS_DIR\"",
+        "eval \"$$(python .buildkite/amd/scripts/aiter_mha_cache.py prepare)\"",
+        "if timeout --signal=TERM --kill-after=2m 55m \\\n  pytest -s -v -n 1 \\\n  tests/diffusion/attention/ \\\n  -m 'core_model and rocm and MI325 and cards_1' \\\n  --run-level \"core_model\"; then\n  python .buildkite/amd/scripts/aiter_mha_cache.py publish\nelse\n  pytest_status=$$?\n  exit \"$${pytest_status}\"\nfi\n",
+        "timeout --signal=TERM --kill-after=2m 10m pytest -s -v -n 1 tests/diffusion/models/mammoth_moda2/test_dit_attention_cuda.py --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "ROCm \u00b7 AR Diffusion Paged Attention GPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_ROCM_USE_AITER=1",
+        "export VLLM_OMNI_AR_FA_REQUIRED=1",
+        "export AITER_JIT_DIR=\"/tmp/vllm-omni-ar-aiter-$$BUILDKITE_JOB_ID\"",
+        "export TORCH_EXTENSIONS_DIR=\"/tmp/vllm-omni-ar-torch-extensions-$$BUILDKITE_JOB_ID\"",
+        "mkdir -p \"$$AITER_JIT_DIR\" \"$$TORCH_EXTENSIONS_DIR\"",
+        "timeout --signal=TERM --kill-after=2m 15m pytest -sv tests/diffusion/ar_diffusion/test_paged_attention.py -m 'core_model and rocm and MI325 and cards_1' --run-level core_model",
+        "timeout --signal=TERM --kill-after=1m 5m pytest -sv tests/diffusion/utils/test_chunked_transfer.py -m 'core_model and rocm and MI325 and cards_1' --run-level core_model"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Batch Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "eval \"$$(python .buildkite/amd/scripts/aiter_mha_cache.py prepare)\"",
+        "pytest -sv tests/diffusion/batching -m 'core_model and rocm and MI325 and cards_1' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Offloader Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_LOGGING_LEVEL=DEBUG",
+        "export VLLM_WORKER_MULTIPROC_METHOD=spawn",
+        "pytest -s -v tests/diffusion/offloader -m \"core_model and rocm and MI325 and cards_1\" --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Cache Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export GPU_ARCHS=gfx942",
+        "export VLLM_LOGGING_LEVEL=DEBUG",
+        "export VLLM_WORKER_MULTIPROC_METHOD=spawn",
+        "pytest -sv tests/diffusion/cache -m 'core_model and rocm and MI325 and cards_1' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion Sequence Parallelism Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_LOGGING_LEVEL=DEBUG",
+        "export VLLM_WORKER_MULTIPROC_METHOD=spawn",
+        "timeout 20m pytest -s -v tests/diffusion/distributed/test_sequence_parallel.py -m core_model",
+        "timeout 20m pytest -s -v tests/diffusion/attention/test_ulysses_uaa.py::test_ulysses_uaa_2d_mask_layout_matches_baseline -m 'core_model and cards_2' --run-level \"core_model\"",
+        "timeout 20m pytest -s -v tests/diffusion/models/ltx2/test_ltx2_transformer_ulysses.py -m 'core_model and rocm and cards_2' --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "ROCm \u00b7 Ulysses UAA Attention \u00b7 2-GPU",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_WORKER_MULTIPROC_METHOD=spawn",
+        "timeout --signal=TERM --kill-after=2m 20m pytest -s -v tests/diffusion/attention/test_ulysses_uaa.py tests/diffusion/attention/test_attention_sp.py -m 'core_model and rocm and MI325 and cards_2' --run-level \"core_model\" --durations=20"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "ROCm \u00b7 Pause-Keep Two-Rank GPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "timeout --signal=TERM --kill-after=1m 30m bash <<'PAUSE_KEEP_READY'\nset -euo pipefail\n# Cold AITER JIT has exceeded 900 seconds before the first\n# execute_model returns. Keep AITER enabled, give the compile a\n# 20-minute wave budget, and retain the 30-minute outer fail-close.\nexport VLLM_OMNI_DLO_DP_WAVE_TIMEOUT=1200\nnodes=(\n  \"tests/diffusion/distributed/test_pause_keep_two_ranks.py::test_keep_pause_two_ranks_ack_and_rank_failure\"\n)\nprintf '%s\\n' \"$${nodes[@]}\" | sort > /tmp/pause-keep-ready-expected.txt\npytest -q tests/diffusion/distributed/test_pause_keep_two_ranks.py \\\n  -m \"core_model and diffusion and rocm and MI325 and cards_2\" \\\n  --run-level \"core_model\" \\\n  --collect-only \\\n  | sed -n 's/^\\(tests\\/.*::.*\\)/\\1/p' \\\n  | sort > /tmp/pause-keep-ready-collected.txt\nif ! diff -u /tmp/pause-keep-ready-expected.txt /tmp/pause-keep-ready-collected.txt; then\n  echo \"Pause-keep READY collection drifted from test_keep_pause_two_ranks_ack_and_rank_failure\" >&2\n  exit 1\nfi\npytest -s -v tests/diffusion/distributed/test_pause_keep_two_ranks.py \\\n  -m \"core_model and diffusion and rocm and MI325 and cards_2\" \\\n  --run-level \"core_model\"\nPAUSE_KEEP_READY\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "Diffusion \u00b7 Model Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "bash .buildkite/amd/scripts/assert-pytest-collection.sh 120 tests/diffusion/models/ --ignore=tests/diffusion/models/auk/test_auk_vae_fastpath.py --ignore=tests/diffusion/models/mammoth_moda2/test_dit_attention_cuda.py --ignore=tests/diffusion/models/minimax_h3/test_minimax_h3_vae_ops.py -m 'core_model and rocm and MI325 and not nvidia_only and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)' --run-level \"core_model\"",
+        "timeout 15m pytest -sv tests/diffusion/models/ --ignore=tests/diffusion/models/auk/test_auk_vae_fastpath.py --ignore=tests/diffusion/models/mammoth_moda2/test_dit_attention_cuda.py --ignore=tests/diffusion/models/minimax_h3/test_minimax_h3_vae_ops.py -m 'core_model and rocm and MI325 and not nvidia_only and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)' --run-level \"core_model\"",
+        "timeout 10m env DIFFUSION_ATTENTION_BACKEND=TORCH_SDPA pytest -sv tests/diffusion/models/mammoth_moda2/test_dit_attention_cuda.py --run-level \"core_model\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "ROCm \u00b7 Diffusion Device-Reduction GPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "set -euo pipefail\nexport ROCM_DEVICE_REDUCTION_ARTIFACT_DIR=\"$${BUILDKITE_BUILD_CHECKOUT_PATH:?}/artifacts/rocm-device-reduction\"\nmkdir -p \"$$ROCM_DEVICE_REDUCTION_ARTIFACT_DIR\"\nbash <<'DEVICE_REDUCTION_READY'\nset -euo pipefail\nnodes=(\n  \"tests/diffusion/test_device_reduction.py::test_device_reduction_matches_a_float32_reference[dtype0]\"\n  \"tests/diffusion/test_device_reduction.py::test_device_reduction_matches_a_float32_reference[dtype1]\"\n  \"tests/diffusion/test_device_reduction.py::test_device_reduction_matches_a_float32_reference[dtype2]\"\n  \"tests/diffusion/test_device_reduction.py::test_device_reduction_deviates_from_a_narrow_postprocess_by_at_most_one[dtype0]\"\n  \"tests/diffusion/test_device_reduction.py::test_device_reduction_deviates_from_a_narrow_postprocess_by_at_most_one[dtype1]\"\n  \"tests/diffusion/test_device_reduction.py::test_device_reduction_shrinks_hop1_payload_4x\"\n  \"tests/diffusion/test_device_reduction.py::test_device_reduction_stays_on_device\"\n  \"tests/diffusion/test_device_reduction.py::test_device_reduction_without_denormalize_matches_already_unit_range\"\n  \"tests/diffusion/test_diffusion_engine.py::test_move_tensor_tree_moves_nested_cuda_tensors_to_cpu\"\n  \"tests/diffusion/test_wan_device_reduction.py::test_wan_media_reduction_matches_float32_reference_and_bounds_native_path\"\n  \"tests/diffusion/test_wan_device_reduction.py::test_wan_uint8_media_finalization_does_not_rescale\"\n  \"tests/diffusion/test_wan_device_reduction.py::test_diffusion_output_to_cpu_moves_wan_media_off_device\"\n  \"tests/diffusion/test_wan_device_reduction.py::test_small_typed_media_is_on_cpu_before_ipc\"\n  \"tests/diffusion/test_wan_device_reduction.py::test_wan_float_media_finalization_matches_the_legacy_path\"\n  \"tests/diffusion/test_wan_device_reduction.py::test_oom_fallback_media_packs_without_device_widening\"\n  \"tests/diffusion/test_wan_device_reduction.py::test_oom_fallback_recovers_the_allocator\"\n  \"tests/diffusion/test_wan_device_reduction.py::test_oom_fallback_releases_late_uint8_traceback_before_clone\"\n)\nprintf '%s\\n' \"$${nodes[@]}\" | sort > /tmp/device-reduction-ready-expected.txt\npytest -q \\\n  tests/diffusion/test_device_reduction.py \\\n  tests/diffusion/test_wan_device_reduction.py \\\n  tests/diffusion/test_diffusion_engine.py::test_move_tensor_tree_moves_nested_cuda_tensors_to_cpu \\\n  -m \"core_model and diffusion and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --collect-only \\\n  | sed -n 's/^\\(tests\\/.*::.*\\)/\\1/p' \\\n  | sort > /tmp/device-reduction-ready-collected.txt\nif ! diff -u /tmp/device-reduction-ready-expected.txt /tmp/device-reduction-ready-collected.txt; then\n  echo \"Device-reduction READY collection drifted from the pinned GPU nodes\" >&2\n  exit 1\nfi\nDEVICE_REDUCTION_READY\n",
+        "status=0\ntimeout --signal=TERM --kill-after=1m 15m \\\n  pytest -s -v \\\n  tests/diffusion/test_device_reduction.py \\\n  tests/diffusion/test_wan_device_reduction.py \\\n  tests/diffusion/test_diffusion_engine.py::test_move_tensor_tree_moves_nested_cuda_tensors_to_cpu \\\n  -m \"core_model and diffusion and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --junitxml=\"$$ROCM_DEVICE_REDUCTION_ARTIFACT_DIR/pytest.xml\" || status=$$?\nif [[ \"$$status\" -eq 0 ]]; then\n  if python -c 'import sys, xml.etree.ElementTree as ET; root = ET.parse(sys.argv[1]).getroot(); suites = [root] if root.tag == \"testsuite\" else list(root.findall(\"testsuite\")); tests = sum(int(suite.attrib.get(\"tests\", \"0\")) for suite in suites); skipped = sum(int(suite.attrib.get(\"skipped\", \"0\")) for suite in suites); ok = tests == 17 and skipped == 0; print(f\"Expected exactly 17 executed device-reduction GPU tests; reported tests={tests}, skipped={skipped}.\", file=sys.stderr) if not ok else None; raise SystemExit(0 if ok else 5)' \"$$ROCM_DEVICE_REDUCTION_ARTIFACT_DIR/pytest.xml\"\n  then\n    status=0\n  else\n    status=$$?\n  fi\nfi\n(exit \"$$status\")\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [
+        ":card_index_dividers: Diffusion Test"
+      ],
+      "label": "ROCm \u00b7 Tiny Diffusion Base GPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "timeout --signal=TERM --kill-after=1m 50m bash <<'TINY_DIFFUSION_BASE_READY'\nset -euo pipefail\nexport TINY_DIFFUSION_BASE_ARTIFACT_DIR=\"$${BUILDKITE_BUILD_CHECKOUT_PATH:?}/artifacts/rocm-tiny-diffusion-base\"\nmkdir -p \"$$TINY_DIFFUSION_BASE_ARTIFACT_DIR\"\nnodes=(\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[AnimaPipeline]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[Flux2KleinPipeline]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[SanaVideoPipeline]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[SanaVideoPipeline[cache_dit]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[SanaVideoPipeline[cpu_offload]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[SanaVideoPipeline[layerwise_offload]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[SanaVideoPipeline[cache_dit+cpu_offload]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[SanaVideoPipeline[cache_dit+layerwise_offload]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[SanaImageToVideoPipeline]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[QwenImagePipeline]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[LongCatImagePipeline[tea_cache]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[LongCatImageEditPipeline[tea_cache]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[Flux2Pipeline[cache_dit+layerwise_offload]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[QwenImageEditPipeline]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[QwenImageEditPlusPipeline]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[StableDiffusion3Pipeline[cache_dit+layerwise_offload]]\"\n  \"tests/model_tests/diffusion/test_common_offline.py::test_pipeline_on_supported_tasks[StableDiffusionXLPipeline[cpu_offload]]\"\n  \"tests/model_tests/diffusion/test_common_online.py::test_online_on_supported_tasks[AnimaPipeline]\"\n  \"tests/model_tests/diffusion/test_common_online.py::test_online_on_supported_tasks[Flux2KleinPipeline]\"\n  \"tests/model_tests/diffusion/test_common_online.py::test_online_on_supported_tasks[QwenImagePipeline]\"\n  \"tests/model_tests/diffusion/test_common_online.py::test_online_on_supported_tasks[QwenImageEditPipeline]\"\n  \"tests/model_tests/diffusion/test_common_online.py::test_online_on_supported_tasks[QwenImageEditPlusPipeline]\"\n)\nprintf '%s\\n' \"$${nodes[@]}\" | sort > /tmp/tiny-diffusion-base-ready-expected.txt\npytest -q \\\n  \"$${nodes[@]}\" \\\n  -m \"core_model and diffusion and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --collect-only \\\n  | sed -n 's/^\\(tests\\/.*::.*\\)/\\1/p' \\\n  | sort > /tmp/tiny-diffusion-base-ready-collected.txt\nif ! diff -u /tmp/tiny-diffusion-base-ready-expected.txt /tmp/tiny-diffusion-base-ready-collected.txt; then\n  echo \"Tiny diffusion base READY collection drifted from the pinned one-card nodes\" >&2\n  exit 1\nfi\npytest -s -v \\\n  \"$${nodes[@]}\" \\\n  -m \"core_model and diffusion and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --junitxml=\"$$TINY_DIFFUSION_BASE_ARTIFACT_DIR/pytest.xml\"\n# Pytest includes subtests in the suite total; compare the parent node ids.\npython -c 'import sys, xml.etree.ElementTree as ET\nfrom collections import Counter\nfrom pathlib import Path\nroot = ET.parse(sys.argv[1]).getroot()\nif root.tag not in {\"testsuite\", \"testsuites\"}:\n    raise SystemExit(\"Unexpected JUnit root\")\nexpected = Counter()\nfor node in Path(sys.argv[2]).read_text().splitlines():\n    module, name = node.split(\"::\", 1)\n    expected[(module.removesuffix(\".py\").replace(\"/\", \".\"), name)] += 1\nactual = Counter((case.get(\"classname\"), case.get(\"name\")) for case in root.iter(\"testcase\"))\nsuites = [root] if root.tag == \"testsuite\" else list(root.findall(\"testsuite\"))\nbad_results = any(int(suite.get(key, \"0\")) != 0\n                  for suite in suites for key in (\"skipped\", \"failures\", \"errors\"))\nbad_results = bad_results or any(list(root.iter(tag)) for tag in (\"skipped\", \"failure\", \"error\"))\nif actual != expected or bad_results:\n    print(\"Expected every pinned tiny-diffusion READY node to execute without skips or failures; \"\n          f\"missing={expected - actual}, unexpected={actual - expected}, bad_results={bad_results}\",\n          file=sys.stderr)\n    raise SystemExit(5)\n' \"$$TINY_DIFFUSION_BASE_ARTIFACT_DIR/pytest.xml\" /tmp/tiny-diffusion-base-ready-expected.txt\nTINY_DIFFUSION_BASE_READY\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [],
+      "label": "ROCm \u00b7 Model Executor GPU Coverage (R2-01) \u00b7 Shard %N/%t",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": 3,
+      "automatic_shard": false,
+      "commands": [
+        "export R2_01_ARTIFACT_DIR=\"$$BUILDKITE_BUILD_CHECKOUT_PATH/artifacts/rocm-r2-01\"",
+        "mkdir -p \"$$R2_01_ARTIFACT_DIR\"",
+        "if [[ \"$${BUILDKITE_PARALLEL_JOB:-0}\" == \"0\" ]]; then\n  bash .buildkite/amd/scripts/assert-pytest-collection.sh 1435 \\\n    tests/model_executor/ \\\n    -m 'core_model and rocm and MI325 and not nvidia_only and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)' \\\n    --run-level \"core_model\"\nfi\n",
+        "timeout --signal=TERM --kill-after=2m 45m pytest -s -v -ra tests/model_executor/ -m 'core_model and rocm and MI325 and not nvidia_only and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)' --run-level \"core_model\" --durations=0 --num-shards=$$BUILDKITE_PARALLEL_JOB_COUNT --shard-id=$$BUILDKITE_PARALLEL_JOB --junitxml=\"$$R2_01_ARTIFACT_DIR/pytest-$${BUILDKITE_PARALLEL_JOB}-of-$${BUILDKITE_PARALLEL_JOB_COUNT}.xml\" 2>&1 | tee \"$$R2_01_ARTIFACT_DIR/pytest-$${BUILDKITE_PARALLEL_JOB}-of-$${BUILDKITE_PARALLEL_JOB_COUNT}.log\"",
+        "tail -n 100 \"$$R2_01_ARTIFACT_DIR/pytest-$${BUILDKITE_PARALLEL_JOB}-of-$${BUILDKITE_PARALLEL_JOB_COUNT}.log\" > \"$$R2_01_ARTIFACT_DIR/pytest-summary-$${BUILDKITE_PARALLEL_JOB}-of-$${BUILDKITE_PARALLEL_JOB_COUNT}.txt\""
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [],
+      "label": "Engine Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export VLLM_WORKER_MULTIPROC_METHOD=spawn",
+        "timeout 15m bash <<'ENGINE_ABORT_READY'\nset -euo pipefail\nnodes=(\n  \"tests/engine/test_async_omni_engine_abort.py::test_abort\"\n)\nprintf '%s\\n' \"$${nodes[@]}\" | sort > /tmp/engine-abort-ready-expected.txt\npytest -q tests/engine/test_async_omni_engine_abort.py \\\n  -m \"core_model and omni and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --collect-only \\\n  | sed -n 's/^\\(tests\\/.*::.*\\)/\\1/p' \\\n  | sort > /tmp/engine-abort-ready-collected.txt\nif ! diff -u /tmp/engine-abort-ready-expected.txt /tmp/engine-abort-ready-collected.txt; then\n  echo \"Engine abort READY collection drifted from test_abort\" >&2\n  exit 1\nfi\npytest -s -v tests/engine/test_async_omni_engine_abort.py \\\n  -m \"core_model and omni and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\"\nENGINE_ABORT_READY\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [],
+      "label": "ROCm \u00b7 Distributed Buffer GPU Smokes",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export ROCM_DISTRIBUTED_BUFFER_ARTIFACT_DIR=\"$${BUILDKITE_BUILD_CHECKOUT_PATH:?}/artifacts/rocm-distributed-buffer\"",
+        "mkdir -p \"$$ROCM_DISTRIBUTED_BUFFER_ARTIFACT_DIR\"",
+        "set -euo pipefail\nnodes=(\n  \"tests/distributed/omni_connectors/test_mooncake_transfer_engine_buffer.py::TestManagedBuffer::test_to_bytes_cuda_pool\"\n  \"tests/distributed/omni_connectors/test_mooncake_transfer_engine_buffer.py::TestMooncakePackedPayloadSmoke::test_from_bytes_device_cuda_round_trip\"\n)\nprintf '%s\\n' \"$${nodes[@]}\" | sort > /tmp/distributed-buffer-ready-expected.txt\npytest -q \\\n  tests/distributed/omni_connectors/test_mooncake_transfer_engine_buffer.py \\\n  -m \"core_model and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --collect-only \\\n  | sed -n 's/^\\(tests\\/.*::.*\\)/\\1/p' \\\n  | sort > /tmp/distributed-buffer-ready-collected.txt\nif ! diff -u /tmp/distributed-buffer-ready-expected.txt /tmp/distributed-buffer-ready-collected.txt; then\n  echo \"Distributed buffer READY collection drifted from the two GPU smokes\" >&2\n  exit 1\nfi\n",
+        "nodes=(\n  \"tests/distributed/omni_connectors/test_mooncake_transfer_engine_buffer.py::TestManagedBuffer::test_to_bytes_cuda_pool\"\n  \"tests/distributed/omni_connectors/test_mooncake_transfer_engine_buffer.py::TestMooncakePackedPayloadSmoke::test_from_bytes_device_cuda_round_trip\"\n)\nstatus=0\ntimeout --signal=TERM --kill-after=1m 20m \\\n  pytest -s -v \"$${nodes[@]}\" \\\n  -m \"core_model and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --junitxml=\"$$ROCM_DISTRIBUTED_BUFFER_ARTIFACT_DIR/pytest.xml\" || status=$$?\nif [[ \"$$status\" -eq 0 ]]; then\n  if python -c 'import sys, xml.etree.ElementTree as ET; root = ET.parse(sys.argv[1]).getroot(); suites = [root] if root.tag == \"testsuite\" else list(root.findall(\"testsuite\")); tests = sum(int(suite.attrib.get(\"tests\", \"0\")) for suite in suites); skipped = sum(int(suite.attrib.get(\"skipped\", \"0\")) for suite in suites); ok = tests == 2 and skipped == 0; print(f\"Expected exactly two executed distributed buffer GPU smokes; reported tests={tests}, skipped={skipped}.\", file=sys.stderr) if not ok else None; raise SystemExit(0 if ok else 5)' \"$$ROCM_DISTRIBUTED_BUFFER_ARTIFACT_DIR/pytest.xml\"\n  then\n    status=0\n  else\n    status=$$?\n  fi\nfi\n(exit \"$$status\")\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [],
+      "label": "ROCm \u00b7 One-Card Worker GPU Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "set -euo pipefail\nexport WORKER_READY_ARTIFACT_DIR=\"$${BUILDKITE_BUILD_CHECKOUT_PATH:?}/artifacts/rocm-worker-one-card\"\nmkdir -p \"$$WORKER_READY_ARTIFACT_DIR\"\nbash <<'WORKER_READY'\nset -euo pipefail\nnodes=(\n      \"tests/worker/test_batched_omni_output.py::test_mixed_stop_flags_do_not_synchronize_cuda\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_settled_frames_match_torch[step_dtype0]\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_settled_frames_match_torch[step_dtype1]\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_codec_graph_inputs_match_the_copies[3-8-1]\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_codec_graph_inputs_match_the_copies[8-8-1]\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_codec_graph_inputs_match_the_copies[2-4-25]\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_eager_post_fills_codec_graph_inputs_and_scratch[3-8]\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_eager_post_fills_codec_graph_inputs_and_scratch[8-8]\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_history_scatter_preserves_independent_storage_and_offsets\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_codec_direct_inputs_wait_for_slow_side_stream\"\n      \"tests/worker_v2/test_eager_frame_kernels.py::test_batched_history_recording_preserves_ragged_reordered_requests\"\n)\nprintf '%s\\n' \"$${nodes[@]}\" | sort > /tmp/worker-ready-expected.txt\npytest -q \\\n  tests/worker/test_batched_omni_output.py \\\n  tests/worker_v2/test_eager_frame_kernels.py \\\n  -m \"core_model and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --collect-only \\\n  | sed -n 's/^\\(tests\\/.*::.*\\)/\\1/p' \\\n  | sort > /tmp/worker-ready-collected.txt\nif ! diff -u /tmp/worker-ready-expected.txt /tmp/worker-ready-collected.txt; then\n  echo \"One-card worker READY collection drifted from the 11 MI325 nodes\" >&2\n  exit 1\nfi\nWORKER_READY\n",
+        "status=0\ntimeout --signal=TERM --kill-after=1m 25m \\\n  pytest -s -v \\\n  tests/worker/test_batched_omni_output.py \\\n  tests/worker_v2/test_eager_frame_kernels.py \\\n  -m \"core_model and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --junitxml=\"$$WORKER_READY_ARTIFACT_DIR/pytest.xml\" || status=$$?\nif [[ \"$$status\" -eq 0 ]]; then\n  if python -c 'import sys, xml.etree.ElementTree as ET; root = ET.parse(sys.argv[1]).getroot(); suites = [root] if root.tag == \"testsuite\" else list(root.findall(\"testsuite\")); tests = sum(int(suite.attrib.get(\"tests\", \"0\")) for suite in suites); skipped = sum(int(suite.attrib.get(\"skipped\", \"0\")) for suite in suites); ok = tests == 11 and skipped == 0; print(f\"Expected exactly 11 executed one-card worker GPU tests; reported tests={tests}, skipped={skipped}.\", file=sys.stderr) if not ok else None; raise SystemExit(0 if ok else 5)' \"$$WORKER_READY_ARTIFACT_DIR/pytest.xml\"\n  then\n    status=0\n  else\n    status=$$?\n  fi\nfi\n(exit \"$$status\")\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [],
+      "label": "ROCm \u00b7 One-Card Worker Copy Test",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "set -euo pipefail\nexport WORKER_COPY_ARTIFACT_DIR=\"$${BUILDKITE_BUILD_CHECKOUT_PATH:?}/artifacts/rocm-worker-copy\"\nmkdir -p \"$$WORKER_COPY_ARTIFACT_DIR\"\nbash <<'WORKER_COPY_READY'\nset -euo pipefail\nnodes=(\n      \"tests/worker/test_device_copy.py::test_tensor_copy_cuda_handles_pageable_and_pinned_sources\"\n      \"tests/worker/test_device_copy.py::test_device_stager_views_survive_until_their_readers_finish\"\n      \"tests/worker/test_device_copy.py::test_device_stager_empty_input_does_not_consume_a_ring_slot\"\n      \"tests/worker_v2/test_intermediate_buffer_cuda_residency.py::test_gpu_resident_values_stay_on_device_after_update[key0-dtype0]\"\n      \"tests/worker_v2/test_intermediate_buffer_cuda_residency.py::test_gpu_resident_values_stay_on_device_after_update[key1-dtype1]\"\n      \"tests/worker_v2/test_omni_ar_model_runner_cuda.py::test_chunked_fixed_token_scores_are_copied_from_cuda\"\n)\nprintf '%s\\n' \"$${nodes[@]}\" | sort > /tmp/worker-copy-ready-expected.txt\npytest -q \\\n  tests/worker/test_device_copy.py \\\n  tests/worker_v2/test_intermediate_buffer_cuda_residency.py \\\n  tests/worker_v2/test_omni_ar_model_runner_cuda.py \\\n  -m \"core_model and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --collect-only \\\n  | sed -n 's/^\\(tests\\/.*::.*\\)/\\1/p' \\\n  | sort > /tmp/worker-copy-ready-collected.txt\nif ! diff -u /tmp/worker-copy-ready-expected.txt /tmp/worker-copy-ready-collected.txt; then\n  echo \"One-card worker copy READY collection drifted from the 6 MI325 nodes\" >&2\n  exit 1\nfi\nWORKER_COPY_READY\n",
+        "status=0\ntimeout --signal=TERM --kill-after=1m 20m \\\n  pytest -s -v \\\n  tests/worker/test_device_copy.py \\\n  tests/worker_v2/test_intermediate_buffer_cuda_residency.py \\\n  tests/worker_v2/test_omni_ar_model_runner_cuda.py \\\n  -m \"core_model and rocm and MI325 and cards_1\" \\\n  --run-level \"core_model\" \\\n  --junitxml=\"$$WORKER_COPY_ARTIFACT_DIR/pytest.xml\" || status=$$?\nif [[ \"$$status\" -eq 0 ]]; then\n  if python -c 'import sys, xml.etree.ElementTree as ET; root = ET.parse(sys.argv[1]).getroot(); suites = [root] if root.tag == \"testsuite\" else list(root.findall(\"testsuite\")); tests = sum(int(suite.attrib.get(\"tests\", \"0\")) for suite in suites); skipped = sum(int(suite.attrib.get(\"skipped\", \"0\")) for suite in suites); ok = tests == 6 and skipped == 0; print(f\"Expected exactly 6 executed one-card worker copy tests; reported tests={tests}, skipped={skipped}.\", file=sys.stderr) if not ok else None; raise SystemExit(0 if ok else 5)' \"$$WORKER_COPY_ARTIFACT_DIR/pytest.xml\"\n  then\n    status=0\n  else\n    status=$$?\n  fi\nfi\n(exit \"$$status\")\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "amd",
+      "pipeline": ".buildkite/amd/test-amd-ready.yml",
+      "group": [],
+      "label": "ROCm \u00b7 Entrypoints GPU Coverage (R2-02)",
+      "hardware": [
+        "amdproduction"
+      ],
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export R2_02_ARTIFACT_DIR=\"$$BUILDKITE_BUILD_CHECKOUT_PATH/artifacts/rocm-r2-02\"",
+        "mkdir -p \"$$R2_02_ARTIFACT_DIR\"",
+        "ps -eo pid=,ppid=,lstart=,stat=,comm= > \"$$R2_02_ARTIFACT_DIR/processes-before.txt\"",
+        "bash .buildkite/amd/scripts/assert-pytest-collection.sh 3 tests/entrypoints/ -m 'core_model and rocm and MI325 and not nvidia_only and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)' --run-level \"core_model\"",
+        "if (\n  trap - ERR\n  set +e\n  timeout --signal=TERM --kill-after=1m 25m \\\n    pytest -s -v -ra \\\n    tests/entrypoints/ \\\n    -m 'core_model and rocm and MI325 and not nvidia_only and not (cards_2 or cards_3 or cards_4 or cards_5 or cards_6 or cards_7 or cards_8)' \\\n    --run-level \"core_model\" \\\n    --durations=0 \\\n    --junitxml=\"$$R2_02_ARTIFACT_DIR/pytest.xml\" \\\n    2>&1 | tee \"$$R2_02_ARTIFACT_DIR/pytest.log\"\n  exit \"$${PIPESTATUS[0]}\"\n); then\n  status=0\nelse\n  status=$$?\nfi\ntail -n 100 \"$$R2_02_ARTIFACT_DIR/pytest.log\" > \\\n  \"$$R2_02_ARTIFACT_DIR/pytest-summary.txt\"\nif [[ \"$$status\" -eq 0 ]]; then\n  if python -c 'import sys, xml.etree.ElementTree as ET\nroot = ET.parse(sys.argv[1]).getroot()\nsuites = [root] if root.tag == \"testsuite\" else list(root.findall(\"testsuite\"))\ntests = sum(int(suite.attrib.get(\"tests\", \"0\")) for suite in suites)\nskipped = sum(int(suite.attrib.get(\"skipped\", \"0\")) for suite in suites)\nif tests != 3 or skipped != 0:\n    print(\n        f\"Expected exactly 3 executed entrypoint GPU tests; \"\n        f\"reported tests={tests}, skipped={skipped}.\",\n        file=sys.stderr,\n    )\n    raise SystemExit(5)\n' \"$$R2_02_ARTIFACT_DIR/pytest.xml\"\n  then\n    status=0\n  else\n    status=$$?\n  fi\nfi\n(exit \"$$status\")\n",
+        "set -o pipefail\nsleep 5\nps -eo pid=,ppid=,lstart=,stat=,comm= > \"$$R2_02_ARTIFACT_DIR/processes-after.txt\"\n# Compare PID plus process start time so PID reuse cannot hide a leak.\n# Double dollars preserve awk field references through Buildkite interpolation.\nawk '\n  NR == FNR {\n    if ($$9 != \"ps\") {\n      baseline[$$1 \"|\" $$3 \"|\" $$4 \"|\" $$5 \"|\" $$6 \"|\" $$7] = 1\n    }\n    next\n  }\n  $$9 != \"ps\" {\n    identity = $$1 \"|\" $$3 \"|\" $$4 \"|\" $$5 \"|\" $$6 \"|\" $$7\n    if (!(identity in baseline)) {\n      print\n      leaked = 1\n    }\n  }\n  END {\n    if (leaked) {\n      print \"status=FAIL leaked_processes_detected=1\"\n      exit 1\n    }\n    print \"status=PASS leaked_processes=0\"\n  }\n' \"$$R2_02_ARTIFACT_DIR/processes-before.txt\" \\\n  \"$$R2_02_ARTIFACT_DIR/processes-after.txt\" \\\n  2>&1 | tee \"$$R2_02_ARTIFACT_DIR/process-cleanup.txt\"\n"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "npu",
+      "pipeline": ".buildkite/npu/test-npu-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Platforms Test",
+      "hardware": "a3_npu_2",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -s -v tests/platforms/npu/test_minicpmo_code2wav_npugraph.py tests/platforms/npu/test_minicpmo_cross_reference_npugraph.py tests/platforms/npu/test_contiguous_kv_cache.py tests/platforms/npu/test_npu_device_copy.py -m 'core_model and npu and A3 and omni' --run-level 'core_model'",
+        "pytest -s -v tests/platforms/npu/test_qwen3_omni_model_state.py tests/platforms/npu/test_npu_generation_v2.py tests/platforms/npu/test_code2wav_graph_wrapper.py -m 'core_model and cpu' --run-level 'core_model'",
+        "pytest -s -v tests/model_executor/models/moss_tts/test_audio_tokenizer_v2_npu.py -m 'core_model and npu and A3' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "CPU test expression",
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "npu",
+      "pipeline": ".buildkite/npu/test-npu-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "NPU IPC Weight Sharing - A2",
+      "hardware": "a2b3_npu_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -s -v tests/distributed/weight_sharing/test_npu_ipc.py -m 'core_model and npu and A2 and cards_1' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "npu",
+      "pipeline": ".buildkite/npu/test-npu-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Diffusion NPU layer tests - A2",
+      "hardware": "a2b3_npu_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -s -v tests/diffusion/layers/test_activation.py -m 'core_model and npu and A2' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "npu",
+      "pipeline": ".buildkite/npu/test-npu-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Diffusion Ulysses symmetric memory - A2",
+      "hardware": "a2b3_npu_4",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "torchrun --standalone --nproc-per-node=2 -m pytest -s -v tests/diffusion/distributed/test_ulysses_symmetric_memory_npu.py -k production -m 'core_model and npu and A2' --run-level 'core_model'",
+        "torchrun --standalone --nproc-per-node=4 -m pytest -s -v tests/diffusion/distributed/test_ulysses_symmetric_memory_npu.py -k production -m 'core_model and npu and A2' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "npu",
+      "pipeline": ".buildkite/npu/test-npu-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Diffusion NPU layer tests - A3",
+      "hardware": "a3_npu_2",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -s -v tests/diffusion/layers/test_activation.py tests/diffusion/layers/test_fused_qk_norm_rope_npu.py tests/diffusion/models/minimax_h3/test_minimax_h3_qwen3vl_swiglu.py tests/diffusion/models/minimax_h3/test_minimax_h3_modulation.py -m 'core_model and npu and A3' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "npu",
+      "pipeline": ".buildkite/npu/test-npu-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Diffusion NPU layer tests - 310P",
+      "hardware": "310p_npu_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -s -v tests/diffusion/layers/test_activation.py -m 'core_model and npu and 310P' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "npu",
+      "pipeline": ".buildkite/npu/test-npu-ready.yml",
+      "group": [
+        ":card_index_dividers: Simple Test"
+      ],
+      "label": "Platforms Test - 310P",
+      "hardware": "310p_npu_1",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "pytest -s -v tests/platforms/npu/test_310p_real_device.py -m 'core_model and npu and 310P and omni' --run-level 'core_model'"
+      ],
+      "selected_by": [
+        "Unit/Simple pipeline job",
+        "Non-E2E core-model backend test command"
+      ]
+    },
+    {
+      "backend": "npu",
+      "pipeline": ".buildkite/npu/test-npu-ready.yml",
+      "group": [
+        ":card_index_dividers: E2E Test"
+      ],
+      "label": "Omni \u00b7 MiniCPM-o 4.5 Perf Test",
+      "hardware": "a3_npu_2",
+      "parallelism": null,
+      "automatic_shard": false,
+      "commands": [
+        "export BENCHMARK_DIR=tests/dfx/perf/results",
+        "pytest -s -v tests/dfx/perf/scripts/run_benchmark.py --assert-baseline --test-config-file tests/dfx/perf/tests/test_minicpmo_4_5_ready.json -m 'core_model and npu and A3 and omni'"
+      ],
+      "selected_by": [
+        "Non-E2E core-model backend test command"
+      ]
+    }
+  ],
+  "hardware_limit": "Only NVIDIA A40 GPU0 is authorized/available; no ROCm or Ascend validation claimed."
+}
